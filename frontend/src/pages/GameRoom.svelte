@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { derived } from 'svelte/store';
+  import { derived, get } from 'svelte/store';
   import { navigate } from 'svelte-routing';
   import {
     room,
@@ -65,7 +65,7 @@
       console.error('Failed to load room:', e);
     }
 
-    const user = $currentUser;
+    const user = get(currentUser);
     if (!user.playerId) {
       navigate('/');
       return;

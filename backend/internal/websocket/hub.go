@@ -91,10 +91,10 @@ func (h *Hub) phaseTimer() {
 			}
 
 			if room.Phase == models.PhaseBusiness {
-				pending := h.roomManager.HasPendingBargain(room.ID)
+				pending, targetPlayerID := h.roomManager.HasPendingBargain(room.ID)
 				if pending != nil && now >= pending.ExpiresAt {
-					targetPlayerID := room.BargainPlayerID
 					bargainID := pending.ID
+					targetPlayerIDLocal := targetPlayerID
 					logs := h.roomManager.ResolveBargain(room.ID, bargainID, false)
 					h.dispatchBusinessLogs(room.ID, logs)
 
@@ -104,7 +104,7 @@ func (h *Hub) phaseTimer() {
 						Data:   room,
 					})
 
-					h.SendToPlayer(room.ID, targetPlayerID, models.WSMessage{
+					h.SendToPlayer(room.ID, targetPlayerIDLocal, models.WSMessage{
 						Type:   "bargain_timeout",
 						RoomID: room.ID,
 						Data:   bargainID,
@@ -113,18 +113,18 @@ func (h *Hub) phaseTimer() {
 
 				if pending == nil {
 					for i := 0; i < 3; i++ {
-						bargain, logs, hasMore := h.roomManager.ProcessNextNPC(room.ID)
+						bargain, bargainTarget, logs, hasMore := h.roomManager.ProcessNextNPC(room.ID)
 						h.dispatchBusinessLogs(room.ID, logs)
 
 						if bargain != nil {
-							bargainTarget := room.BargainPlayerID
+							bargainTargetLocal := bargainTarget
 							h.BroadcastToRoom(room.ID, models.WSMessage{
 								Type:   "room_update",
 								RoomID: room.ID,
 								Data:   room,
 							})
 
-							h.SendToPlayer(room.ID, bargainTarget, models.WSMessage{
+							h.SendToPlayer(room.ID, bargainTargetLocal, models.WSMessage{
 								Type:   "bargain_request",
 								RoomID: room.ID,
 								Data:   bargain,

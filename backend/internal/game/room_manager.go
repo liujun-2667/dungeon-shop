@@ -171,21 +171,21 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 	return true
 }
 
-func (rm *RoomManager) ProcessNextNPC(roomID string) (*models.BargainRequest, []models.BusinessLogEntry, bool) {
+func (rm *RoomManager) ProcessNextNPC(roomID string) (*models.BargainRequest, string, []models.BusinessLogEntry, bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	room, ok := rm.rooms[roomID]
 	if !ok || room.Status != "playing" || room.Phase != models.PhaseBusiness {
-		return nil, nil, false
+		return nil, "", nil, false
 	}
 
 	if room.PendingBargain != nil {
-		return nil, nil, true
+		return nil, "", nil, true
 	}
 
 	if room.NPCIndex >= len(room.NPCsThisWeek) {
-		return nil, nil, false
+		return nil, "", nil, false
 	}
 
 	npcIdx := room.NPCIndex
@@ -257,14 +257,14 @@ func (rm *RoomManager) ProcessNextNPC(roomID string) (*models.BargainRequest, []
 	}
 
 	if playerID == "" {
-		return nil, rm.popLogs(room), room.NPCIndex < len(room.NPCsThisWeek)
+		return nil, "", rm.popLogs(room), room.NPCIndex < len(room.NPCsThisWeek)
 	}
 
 	bargain, logs, hasMore := rm.processSingleNPCShopping(room, npc, playerID, npcIdx)
 	if logs != nil {
 		room.BusinessLogs = append(room.BusinessLogs, logs...)
 	}
-	return bargain, rm.popLogs(room), hasMore || room.NPCIndex < len(room.NPCsThisWeek)
+	return bargain, playerID, rm.popLogs(room), hasMore || room.NPCIndex < len(room.NPCsThisWeek)
 }
 
 func (rm *RoomManager) popLogs(room *models.Room) []models.BusinessLogEntry {
@@ -491,10 +491,6 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 	npcRand := NewSeededRand(room.Seed + int64(room.CurrentWeek)*9000 + int64(room.BargainNPCIdx)*33)
 
 	if accepted {
-		priceTier := GetPriceTier(bargain.BargainedPrice, qualityBasePrice)
-		if priceTier == PriceTierBargain {
-			player.Reputation++
-		}
 		player.Reputation++
 
 		player.Gold += bargain.BargainedPrice
@@ -556,15 +552,15 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 	return rm.popLogs(room)
 }
 
-func (rm *RoomManager) HasPendingBargain(roomID string) *models.BargainRequest {
+func (rm *RoomManager) HasPendingBargain(roomID string) (*models.BargainRequest, string) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
 	room, ok := rm.rooms[roomID]
-	if !ok {
-		return nil
+	if !ok || room.PendingBargain == nil {
+		return nil, ""
 	}
-	return room.PendingBargain
+	return room.PendingBargain, room.BargainPlayerID
 }
 
 func ProcessExplorePhase(room *models.Room) {
