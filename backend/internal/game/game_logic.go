@@ -72,7 +72,7 @@ func GenerateWholesalerStock(seed int64, week int) []models.WholesalerItem {
 	return stock
 }
 
-func GenerateNPCs(seed int64, week int, playerCount int, event *models.GlobalEvent) []models.NPC {
+func GenerateNPCs(seed int64, week int, playerCount int, playerIDs []string, event *models.GlobalEvent) []models.NPC {
 	sr := NewSeededRand(seed + int64(week)*2000 + 500)
 	numNPCs := 8 + week*2
 
@@ -116,19 +116,32 @@ func GenerateNPCs(seed int64, week int, playerCount int, event *models.GlobalEve
 		}
 
 		npc := models.NPC{
-			ID:          models.NewID(),
-			Name:        name,
-			Class:       class,
-			Budget:      budget,
-			Preferences: preferences,
-			IsVIP:       false,
+			ID:                models.NewID(),
+			Name:              name,
+			Class:             class,
+			Budget:            budget,
+			Preferences:       preferences,
+			IsVIP:             false,
+			PriceSensitivity:  0.6 + sr.Float64()*0.6,
+			MaxShopsToVisit:   1 + sr.Intn(playerCount),
+			Impulsiveness:     0.3 + sr.Float64()*0.7,
+			QualityPreference: 0.3 + sr.Float64()*0.7,
 		}
 
 		npcs = append(npcs, npc)
 	}
 
-	if event != nil && event.Effects.VIPCustomer {
-		targetPlayerIdx := sr.Intn(playerCount)
+	if event != nil && event.Effects.VIPCustomer && len(playerIDs) > 0 {
+		nonBankruptIDs := make([]string, 0)
+		if len(playerIDs) > 0 {
+			nonBankruptIDs = playerIDs
+		}
+		if len(nonBankruptIDs) == 0 {
+			nonBankruptIDs = playerIDs
+		}
+		targetIdx := sr.Intn(len(nonBankruptIDs))
+		targetID := nonBankruptIDs[targetIdx]
+
 		vipBudget := 500 + week*50
 		vip := models.NPC{
 			ID:     models.NewID(),
@@ -136,15 +149,18 @@ func GenerateNPCs(seed int64, week int, playerCount int, event *models.GlobalEve
 			Class:  models.ClassWarrior,
 			Budget: vipBudget,
 			Preferences: map[models.Category]float64{
-				models.CategoryWeapon:   1.5,
-				models.CategoryArmor:    1.5,
+				models.CategoryWeapon:     1.5,
+				models.CategoryArmor:      1.5,
 				models.CategoryConsumable: 1.0,
-				models.CategoryMaterial: 1.0,
+				models.CategoryMaterial:   1.0,
 			},
-			IsVIP:          true,
-			TargetPlayerID: "",
+			IsVIP:             true,
+			TargetPlayerID:    targetID,
+			PriceSensitivity:  0.2,
+			MaxShopsToVisit:   1,
+			Impulsiveness:     0.8,
+			QualityPreference: 1.0,
 		}
-		_ = targetPlayerIdx
 		npcs = append(npcs, vip)
 	}
 

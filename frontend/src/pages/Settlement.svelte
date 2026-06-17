@@ -14,7 +14,9 @@
     Legend,
     ArcElement,
   } from 'chart.js';
-  import { currentUser, currentPlayer, room } from '../stores/gameStore.js';
+  import { currentUser, currentPlayer, room, itemTypes, calculateFinalAssets } from '../stores/gameStore.js';
+
+  export let params;
 
   ChartJS.register(
     CategoryScale,
@@ -26,6 +28,8 @@
     Legend,
     ArcElement
   );
+
+  const QUALITY_MULT = { common: 1.0, fine: 1.5, rare: 2.5, legendary: 4.0 };
 
   let results = null;
   let myResult = null;
@@ -50,7 +54,7 @@
     };
   });
 
-  const pieChartData = derived(currentPlayer, ($player) => {
+  const pieChartData = derived([currentPlayer, itemTypes], ([$player, $itemTypes]) => {
     if (!$player) return null;
 
     return {
@@ -59,7 +63,7 @@
         {
           data: [
             $player.gold || 0,
-            calculateInventoryValue($player),
+            calculateInventoryValue($player, $itemTypes),
             Math.floor(($player.upgradeInvestment || 0) * 0.5),
           ],
           backgroundColor: ['#f59e0b', '#10b981', '#3b82f6'],
@@ -110,23 +114,84 @@
     },
   };
 
-  function calculateInventoryValue(player) {
+  function calculateInventoryValue(player, itemTypesMap) {
     let value = 0;
+    const types = itemTypesMap || {};
+    const evalItem = (item) => {
+      const itemType = types[item.typeId];
+      if (itemType && QUALITY_MULT[item.quality] !== undefined) {
+        return Math.floor(itemType.basePrice * QUALITY_MULT[item.quality] * 0.8);
+      }
+      return Math.floor((item.purchaseCost || 0) * 0.8);
+    };
     for (const item of player.warehouse || []) {
-      value += Math.floor(item.purchaseCost * 0.8);
+      value += evalItem(item);
     }
     for (const slot of player.shelves || []) {
       if (slot.item) {
-        value += Math.floor(slot.item.purchaseCost * 0.8);
+        value += evalItem(slot.item);
+      }
+    }
+    if (player.branchShops) {
+      for (const branch of player.branchShops) {
+        for (const slot of branch.shelves || []) {
+          if (slot.item) {
+            value += evalItem(slot.item);
+          }
+        }
       }
     }
     return value;
   }
 
-  onMount(() => {
+  async function recomputeRanking() {
+    if (!$room) return null;
+    const players = Object.values($room.players);
+    const ranked = players
+      .map(p => ({
+        playerId: p.id,
+        name: p.name,
+        finalAssets: calculateFinalAssets(p, $itemTypes),
+      }))
+      .sort((a, b) => b.finalAssets - a.finalAssets);
+    return ranked.map((r, i) => ({
+      ...r,
+      rank: i + 1,
+      isWinner: i === 0,
+    }));
+  }
+
+  onMount(async () => {
+    try {
+      if (Object.keys($itemTypes).length === 0) {
+        const { api } = await import('../utils/api.js');
+        const types = await api.getItemTypes();
+        itemTypes.set(types);
+      }
+    } catch (e) {
+      console.error('Failed to load item types:', e);
+    }
+
     const stored = sessionStorage.getItem('gameResults');
     if (stored) {
       results = JSON.parse(stored);
+    }
+
+    if (!$room && params?.roomId) {
+      try {
+        const { api } = await import('../utils/api.js');
+        const roomData = await api.getRoom(params.roomId);
+        room.set(roomData);
+      } catch (e) {
+        console.error('Failed to load room:', e);
+      }
+    }
+
+    if (!results && $room) {
+      results = await recomputeRanking();
+      if (results) {
+        sessionStorage.setItem('gameResults', JSON.stringify(results));
+      }
     }
 
     const userId = $currentUser.playerId;

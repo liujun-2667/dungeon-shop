@@ -1,5 +1,12 @@
 import { writable, derived } from 'svelte/store';
 
+const QUALITY_MULTIPLIER = {
+  common: 1.0,
+  fine: 1.5,
+  rare: 2.5,
+  legendary: 4.0,
+};
+
 export const currentUser = writable({
   playerId: localStorage.getItem('playerId') || '',
   playerName: localStorage.getItem('playerName') || '',
@@ -21,7 +28,7 @@ export const currentPlayer = derived([room, currentUser], ([$room, $user]) => {
   return $room.players[$user.playerId] || null;
 });
 
-export const playerRanking = derived(room, ($room) => {
+export const playerRanking = derived([room, itemTypes], ([$room, $itemTypes]) => {
   if (!$room) return [];
   const players = Object.values($room.players);
   return players
@@ -30,28 +37,53 @@ export const playerRanking = derived(room, ($room) => {
       name: p.name,
       shopName: p.shopName,
       gold: p.gold,
-      assets: calculateAssets(p),
+      assets: calculateAssets(p, $itemTypes),
       isBankrupt: p.isBankrupt,
     }))
     .sort((a, b) => b.assets - a.assets);
 });
 
-function calculateAssets(player) {
+function calculateAssets(player, itemTypesMap) {
   let value = player.gold;
-  
+  const types = itemTypesMap || {};
+
+  const evalItem = (item) => {
+    const itemType = types[item.typeId];
+    if (itemType && QUALITY_MULTIPLIER[item.quality] !== undefined) {
+      const basePrice = itemType.basePrice;
+      const qualityMult = QUALITY_MULTIPLIER[item.quality];
+      return basePrice * qualityMult * 0.8;
+    }
+    return (item.purchaseCost || 0) * 0.8;
+  };
+
   for (const item of player.warehouse) {
-    value += item.purchaseCost * 0.8;
+    value += evalItem(item);
   }
-  
+
   for (const slot of player.shelves) {
     if (slot.item) {
-      value += slot.item.purchaseCost * 0.8;
+      value += evalItem(slot.item);
     }
   }
-  
+
+  if (player.branchShops) {
+    for (const branch of player.branchShops) {
+      for (const slot of branch.shelves) {
+        if (slot.item) {
+          value += evalItem(slot.item);
+        }
+      }
+    }
+  }
+
   value += player.upgradeInvestment * 0.5;
-  
+
   return Math.floor(value);
+}
+
+export function calculateFinalAssets(player, itemTypesMap) {
+  return calculateAssets(player, itemTypesMap);
 }
 
 export function addLog(message, type = 'info') {

@@ -6,7 +6,11 @@
 </script>
 
 <Router>
-  <Route path="/" component={Lobby} />
-  <Route path="/room/:roomId" component={GameRoom} />
-  <Route path="/room/:roomId/settlement" component={Settlement} />
+  <Route path="/"><Lobby /></Route>
+  <Route path="/room/:roomId" let:params>
+    <GameRoom {params} />
+  </Route>
+  <Route path="/room/:roomId/settlement" let:params>
+    <Settlement {params} />
+  </Route>
 </Router>

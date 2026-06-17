@@ -64,6 +64,10 @@ type NPC struct {
 	Preferences map[Category]float64 `json:"preferences"`
 	IsVIP    bool     `json:"isVIP"`
 	TargetPlayerID string `json:"targetPlayerId,omitempty"`
+	PriceSensitivity float64 `json:"priceSensitivity"`
+	MaxShopsToVisit int   `json:"maxShopsToVisit"`
+	Impulsiveness  float64 `json:"impulsiveness"`
+	QualityPreference float64 `json:"qualityPreference"`
 }
 
 type Adventurer struct {

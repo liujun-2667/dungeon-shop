@@ -95,7 +95,11 @@ func (rm *RoomManager) StartGame(roomID string) bool {
 	room.PhaseEndTime = time.Now().Unix() + int64(room.PhaseDuration)
 
 	room.WholesalerStock = GenerateWholesalerStock(room.Seed, room.CurrentWeek)
-	room.NPCsThisWeek = GenerateNPCs(room.Seed, room.CurrentWeek, len(room.Players), room.CurrentEvent)
+	playerIDs := make([]string, 0, len(room.Players))
+	for id := range room.Players {
+		playerIDs = append(playerIDs, id)
+	}
+	room.NPCsThisWeek = GenerateNPCs(room.Seed, room.CurrentWeek, len(room.Players), playerIDs, room.CurrentEvent)
 
 	return true
 }
@@ -147,7 +151,11 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 			}
 		}
 
-		room.NPCsThisWeek = GenerateNPCs(room.Seed, room.CurrentWeek, len(room.Players), room.CurrentEvent)
+		npcPlayerIDs := make([]string, 0, len(room.Players))
+		for id := range room.Players {
+			npcPlayerIDs = append(npcPlayerIDs, id)
+		}
+		room.NPCsThisWeek = GenerateNPCs(room.Seed, room.CurrentWeek, len(room.Players), npcPlayerIDs, room.CurrentEvent)
 
 		room.Phase = models.PhasePurchase
 	}
@@ -158,17 +166,23 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 
 func ProcessBusinessPhase(room *models.Room) {
 	npcs := ShuffleNPCs(room.NPCsThisWeek, room.Seed, room.CurrentWeek)
-	sr := NewSeededRand(room.Seed + int64(room.CurrentWeek)*6000)
 
 	playerIDs := make([]string, 0, len(room.Players))
 	for id := range room.Players {
 		playerIDs = append(playerIDs, id)
 	}
 
-	for _, npc := range npcs {
-		visitOrder := sr.Perm(len(playerIDs))
+	for npcIdx, npc := range npcs {
+		npcSeed := room.Seed + int64(room.CurrentWeek)*6000 + int64(npcIdx)*100
+		npcRand := NewSeededRand(npcSeed)
 
 		if npc.IsVIP {
+			if npc.TargetPlayerID != "" {
+				if player, ok := room.Players[npc.TargetPlayerID]; ok && !player.IsBankrupt {
+					ProcessNPCShopping(room, npc, npc.TargetPlayerID, npcIdx)
+					continue
+				}
+			}
 			nonBankrupt := make([]string, 0)
 			for _, id := range playerIDs {
 				if !room.Players[id].IsBankrupt {
@@ -176,13 +190,20 @@ func ProcessBusinessPhase(room *models.Room) {
 				}
 			}
 			if len(nonBankrupt) > 0 {
-				targetIdx := sr.Intn(len(nonBankrupt))
-				ProcessNPCShopping(room, npc, nonBankrupt[targetIdx])
+				targetIdx := npcRand.Intn(len(nonBankrupt))
+				ProcessNPCShopping(room, npc, nonBankrupt[targetIdx], npcIdx)
 			}
 			continue
 		}
 
+		visitOrder := npcRand.Perm(len(playerIDs))
+		shopsVisited := 0
+
 		for _, idx := range visitOrder {
+			if shopsVisited >= npc.MaxShopsToVisit {
+				break
+			}
+
 			playerID := playerIDs[idx]
 			player := room.Players[playerID]
 
@@ -190,25 +211,31 @@ func ProcessBusinessPhase(room *models.Room) {
 				continue
 			}
 
-			visitRoll := sr.Float64()
-			if visitRoll > player.AttractionBonus {
+			visitRoll := npcRand.Float64()
+			adjustedBonus := player.AttractionBonus
+			if shopsVisited == 0 {
+				adjustedBonus = 1.0
+			}
+			if visitRoll > adjustedBonus {
 				continue
 			}
 
-			if ProcessNPCShopping(room, npc, playerID) {
+			shopsVisited++
+			if ProcessNPCShopping(room, npc, playerID, npcIdx) {
 				break
 			}
 		}
 	}
 }
 
-func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string) bool {
+func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string, npcIdx int) bool {
 	player := room.Players[playerID]
 	if player == nil || player.IsBankrupt {
 		return false
 	}
 
-	sr := NewSeededRand(room.Seed + int64(room.CurrentWeek)*7000)
+	npcSeed := room.Seed + int64(room.CurrentWeek)*7000 + int64(npcIdx)*50
+	npcRand := NewSeededRand(npcSeed)
 	budget := npc.Budget
 
 	allSlots := make([]*models.ShelfSlot, 0)
@@ -222,24 +249,53 @@ func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string) bool
 		}
 	}
 
-	slotOrder := sr.Perm(len(allSlots))
-
-	for _, idx := range slotOrder {
-		slot := allSlots[idx]
-		if slot.Item == nil || slot.Price <= 0 {
-			continue
+	validSlots := make([]*models.ShelfSlot, 0)
+	for _, slot := range allSlots {
+		if slot.Item != nil && slot.Price > 0 && slot.Price <= budget {
+			if _, ok := models.GetItemType(slot.Item.TypeID); ok {
+				validSlots = append(validSlots, slot)
+			}
 		}
+	}
 
-		if slot.Price > budget {
-			continue
-		}
+	type scoredSlot struct {
+		slot  *models.ShelfSlot
+		score float64
+	}
+	scored := make([]scoredSlot, 0, len(validSlots))
+	for _, slot := range validSlots {
+		itemType, _ := models.GetItemType(slot.Item.TypeID)
+		pref := npc.Preferences[itemType.Category]
+		qualityMult := 1.0 + (float64(slot.Item.QualityRank()) * npc.QualityPreference * 0.3)
+		impulseBonus := (0.7 + npc.Impulsiveness * 0.6)
+		randomFactor := 0.8 + npcRand.Float64()*0.4
+		score := pref * qualityMult * impulseBonus * randomFactor
+		scored = append(scored, scoredSlot{slot: slot, score: score})
+	}
 
-		itemType, ok := models.GetItemType(slot.Item.TypeID)
-		if !ok {
-			continue
+	for i := len(scored) - 1; i > 0; i-- {
+		j := npcRand.Intn(i + 1)
+		scored[i], scored[j] = scored[j], scored[i]
+	}
+
+	for i := 0; i < len(scored)-1; i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
 		}
+	}
+
+	for _, ss := range scored {
+		slot := ss.slot
+		itemType, _ := models.GetItemType(slot.Item.TypeID)
 
 		prob := CalculatePurchaseProbability(npc, itemType, slot.Price, room.CurrentEvent)
+		prob *= (0.8 + npc.Impulsiveness*0.4)
+
+		if npc.IsVIP {
+			prob *= 1.5
+		}
 
 		prices := GetAllPlayerPrices(room, slot.Item.TypeID)
 		if len(prices) > 1 {
@@ -250,11 +306,25 @@ func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string) bool
 				}
 			}
 			if slot.Price > minPrice {
-				prob *= 0.3
+				priceGap := float64(slot.Price-minPrice) / float64(minPrice)
+				sensitivityMult := 1.0 - priceGap*npc.PriceSensitivity
+				if sensitivityMult < 0.1 {
+					sensitivityMult = 0.1
+				}
+				prob *= sensitivityMult
+			} else if slot.Price == minPrice {
+				prob *= 1.3
 			}
 		}
 
-		if sr.Float64() < prob {
+		if prob > 1.0 {
+			prob = 1.0
+		}
+		if prob < 0 {
+			prob = 0
+		}
+
+		if npcRand.Float64() < prob {
 			player.Gold += slot.Price
 			player.WeeklyStats.Income += slot.Price
 			player.WeeklyStats.ItemsSold++
@@ -262,8 +332,6 @@ func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string) bool
 			slot.Item = nil
 			slot.ItemID = ""
 			slot.Price = 0
-
-			budget -= slot.Price
 
 			return true
 		}

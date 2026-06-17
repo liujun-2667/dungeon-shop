@@ -179,3 +179,22 @@ func CalculatePrice(basePrice int, quality Quality) int {
 func GetAdventurerHireCost(level int) int {
 	return 50 + (level-1)*30
 }
+
+func (q Quality) Rank() int {
+	switch q {
+	case QualityCommon:
+		return 0
+	case QualityFine:
+		return 1
+	case QualityRare:
+		return 2
+	case QualityLegendary:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func (i *Item) QualityRank() int {
+	return i.Quality.Rank()
+}
