@@ -16,6 +16,9 @@
     gameResults,
     isConnected,
     addLog,
+    addBargainRequest,
+    removeBargainRequest,
+    clearBargainRequests,
   } from '../stores/gameStore.js';
   import { api, connectWebSocket, sendWS } from '../utils/api.js';
 
@@ -27,6 +30,7 @@
   import HireModal from '../components/HireModal.svelte';
   import UpgradeModal from '../components/UpgradeModal.svelte';
   import SynthesisModal from '../components/SynthesisModal.svelte';
+  import BargainBubble from '../components/BargainBubble.svelte';
 
   export let params;
   let ws = null;
@@ -95,6 +99,7 @@
   onDestroy(() => {
     if (ws) ws.close();
     if (countdownInterval) clearInterval(countdownInterval);
+    clearBargainRequests();
   });
 
   function handleMessage(msg) {
@@ -109,6 +114,9 @@
         currentPhase.set(msg.data.phase);
         phaseEndTime.set(msg.data.phaseEndTime);
         addLog(`进入 ${phaseNames[msg.data.phase]} 阶段 - 第 ${msg.data.week} 周`, 'info');
+        if (msg.data.phase !== 'business') {
+          clearBargainRequests();
+        }
         break;
       case 'player_joined':
         addLog(`${msg.data.name} 加入了游戏`, 'info');
@@ -122,10 +130,38 @@
       case 'game_end':
         gameResults.set(msg.data);
         addLog('游戏结束！', 'success');
+        clearBargainRequests();
         setTimeout(() => navigate(`/room/${params.roomId}/settlement`), 2000);
         break;
       case 'chat':
         addLog(msg.data, 'chat');
+        break;
+      case 'business_log':
+        if (msg.data && msg.data.message) {
+          const logType = msg.data.type === 'purchase' || msg.data.type === 'bargain_success' || msg.data.type === 'bargain_reject_buy'
+            ? 'success'
+            : msg.data.type === 'bargain_start'
+              ? 'info'
+              : 'info';
+          addLog(msg.data.message, logType);
+        }
+        break;
+      case 'bargain_request':
+        if (msg.data) {
+          addBargainRequest(msg.data);
+          addLog(`⚠️ ${msg.data.npcName} 发起了砍价！`, 'warning');
+        }
+        break;
+      case 'bargain_timeout':
+        if (msg.data) {
+          removeBargainRequest(msg.data);
+          addLog('砍价超时，已默认拒绝', 'warning');
+        }
+        break;
+      case 'bargain_resolved':
+        if (msg.data && msg.data.bargainId) {
+          removeBargainRequest(msg.data.bargainId);
+        }
         break;
     }
   }
@@ -301,6 +337,8 @@
       {startSynthesis}
     />
   {/if}
+
+  <BargainBubble {ws} />
 </div>
 
 <style>

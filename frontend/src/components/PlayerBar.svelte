@@ -1,5 +1,5 @@
 <script>
-  import { playerRanking, itemTypes } from '../stores/gameStore.js';
+  import { playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass } from '../stores/gameStore.js';
 
   const qualityNames = {
     common: '普通',
@@ -11,37 +11,90 @@
   function getItemName(typeId) {
     return $itemTypes[typeId]?.name || typeId;
   }
+
+  function getReputationTooltip(reputation) {
+    const level = getReputationLevel(reputation);
+    const label = getReputationLabel(level);
+    const desc = getReputationDescription(level);
+    return `声望: ${reputation}\n等级: ${label}\n效果: ${desc}`;
+  }
+
+  function getReputationIcon(reputation) {
+    if (reputation >= 5) return '⭐';
+    if (reputation <= -5) return '💀';
+    if (reputation > 0) return '👍';
+    if (reputation < 0) return '👎';
+    return '😐';
+  }
 </script>
 
 <div class="player-bar">
   {#each $playerRanking as player, index}
-    <div class="player-card {player.isBankrupt ? 'bankrupt' : ''}">
-      <div class="player-rank">#{index + 1}</div>
-      <div class="player-info">
-        <div class="player-header">
-          <span class="player-name">{player.name}</span>
-          <span class="shop-name">{player.shopName}</span>
-        </div>
-        <div class="player-stats">
-          <span class="gold">💰 {player.gold}</span>
-          <span class="assets">📊 {player.assets}</span>
-        </div>
-        <div class="player-shelves">
-          {#each player.shelves as shelf}
-            {#if shelf.item}
-              <div class="shelf-item quality-{shelf.item.quality}" title="{getItemName(shelf.item.typeId)} {qualityNames[shelf.item.quality]}">
-                {shelf.price}💰
-              </div>
-            {:else}
-              <div class="shelf-empty">-</div>
+    {#if player.reputation !== undefined}
+      {@const repLevel = getReputationLevel(player.reputation)}
+      {@const repLabel = getReputationLabel(repLevel)}
+      <div class="player-card {player.isBankrupt ? 'bankrupt' : ''} {getReputationClass(repLevel)}">
+        <div class="player-rank">#{index + 1}</div>
+        <div class="player-info">
+          <div class="player-header">
+            <span class="player-name">{player.name}</span>
+            <span class="shop-name">{player.shopName}</span>
+            {#if repLevel !== 'normal'}
+              <span class="shop-badge badge-{repLevel}">{repLabel}</span>
             {/if}
-          {/each}
+          </div>
+          <div class="player-stats">
+            <span class="gold">💰 {player.gold}</span>
+            <span class="assets">📊 {player.assets}</span>
+            <span class="reputation" title="{getReputationTooltip(player.reputation)}">
+              {getReputationIcon(player.reputation)} {player.reputation}
+            </span>
+          </div>
+          <div class="player-shelves">
+            {#each player.shelves as shelf}
+              {#if shelf.item}
+                <div class="shelf-item quality-{shelf.item.quality}" title="{getItemName(shelf.item.typeId)} {qualityNames[shelf.item.quality]}">
+                  {shelf.price}💰
+                </div>
+              {:else}
+                <div class="shelf-empty">-</div>
+              {/if}
+            {/each}
+          </div>
         </div>
+        {#if player.isBankrupt}
+          <div class="bankrupt-badge">破产</div>
+        {/if}
       </div>
-      {#if player.isBankrupt}
-        <div class="bankrupt-badge">破产</div>
-      {/if}
-    </div>
+    {:else}
+      <div class="player-card {player.isBankrupt ? 'bankrupt' : ''}">
+        <div class="player-rank">#{index + 1}</div>
+        <div class="player-info">
+          <div class="player-header">
+            <span class="player-name">{player.name}</span>
+            <span class="shop-name">{player.shopName}</span>
+          </div>
+          <div class="player-stats">
+            <span class="gold">💰 {player.gold}</span>
+            <span class="assets">📊 {player.assets}</span>
+          </div>
+          <div class="player-shelves">
+            {#each player.shelves as shelf}
+              {#if shelf.item}
+                <div class="shelf-item quality-{shelf.item.quality}" title="{getItemName(shelf.item.typeId)} {qualityNames[shelf.item.quality]}">
+                  {shelf.price}💰
+                </div>
+              {:else}
+                <div class="shelf-empty">-</div>
+              {/if}
+            {/each}
+          </div>
+        </div>
+        {#if player.isBankrupt}
+          <div class="bankrupt-badge">破产</div>
+        {/if}
+      </div>
+    {/if}
   {/each}
 </div>
 
@@ -138,5 +191,43 @@
     border-radius: 4px;
     font-weight: bold;
     font-size: 18px;
+  }
+
+  .reputation {
+    font-weight: 600;
+    cursor: help;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  .player-card.reputation-honest {
+    border-color: #10b981;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
+  }
+
+  .player-card.reputation-shady {
+    border-color: #ef4444;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.25);
+  }
+
+  .shop-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .shop-badge.badge-honest {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+  }
+
+  .shop-badge.badge-shady {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: white;
   }
 </style>

@@ -116,9 +116,13 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 	switch room.Phase {
 	case models.PhasePurchase:
 		room.Phase = models.PhaseBusiness
-		ProcessBusinessPhase(room)
+		room.NPCIndex = 0
+		room.PendingBargain = nil
+		room.BusinessLogs = make([]models.BusinessLogEntry, 0)
+		room.NPCsThisWeek = ShuffleNPCs(room.NPCsThisWeek, room.Seed, room.CurrentWeek)
 	case models.PhaseBusiness:
 		room.Phase = models.PhaseExplore
+		room.PendingBargain = nil
 		ProcessExplorePhase(room)
 	case models.PhaseExplore:
 		room.CurrentWeek++
@@ -129,7 +133,10 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 		}
 
 		for _, player := range room.Players {
-			ProcessExpiredItems(player, room.CurrentWeek)
+			expiredCount := ProcessExpiredItems(player, room.CurrentWeek)
+			if expiredCount > 0 {
+				player.Reputation -= expiredCount * 2
+			}
 			CheckBankruptcy(player)
 			player.AssetHistory = append(player.AssetHistory, CalculateTotalAssets(player))
 			player.WeeklyStats = models.WeeklyStats{}
@@ -164,25 +171,43 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 	return true
 }
 
-func ProcessBusinessPhase(room *models.Room) {
-	npcs := ShuffleNPCs(room.NPCsThisWeek, room.Seed, room.CurrentWeek)
+func (rm *RoomManager) ProcessNextNPC(roomID string) (*models.BargainRequest, []models.BusinessLogEntry, bool) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok || room.Status != "playing" || room.Phase != models.PhaseBusiness {
+		return nil, nil, false
+	}
+
+	if room.PendingBargain != nil {
+		return nil, nil, true
+	}
+
+	if room.NPCIndex >= len(room.NPCsThisWeek) {
+		return nil, nil, false
+	}
+
+	npcIdx := room.NPCIndex
+	npc := room.NPCsThisWeek[npcIdx]
+	room.NPCIndex++
+
+	npcSeed := room.Seed + int64(room.CurrentWeek)*6000 + int64(npcIdx)*100
+	npcRand := NewSeededRand(npcSeed)
 
 	playerIDs := make([]string, 0, len(room.Players))
 	for id := range room.Players {
 		playerIDs = append(playerIDs, id)
 	}
 
-	for npcIdx, npc := range npcs {
-		npcSeed := room.Seed + int64(room.CurrentWeek)*6000 + int64(npcIdx)*100
-		npcRand := NewSeededRand(npcSeed)
-
-		if npc.IsVIP {
-			if npc.TargetPlayerID != "" {
-				if player, ok := room.Players[npc.TargetPlayerID]; ok && !player.IsBankrupt {
-					ProcessNPCShopping(room, npc, npc.TargetPlayerID, npcIdx)
-					continue
-				}
+	playerID := ""
+	if npc.IsVIP {
+		if npc.TargetPlayerID != "" {
+			if p, ok := room.Players[npc.TargetPlayerID]; ok && !p.IsBankrupt {
+				playerID = npc.TargetPlayerID
 			}
+		}
+		if playerID == "" {
 			nonBankrupt := make([]string, 0)
 			for _, id := range playerIDs {
 				if !room.Players[id].IsBankrupt {
@@ -191,11 +216,10 @@ func ProcessBusinessPhase(room *models.Room) {
 			}
 			if len(nonBankrupt) > 0 {
 				targetIdx := npcRand.Intn(len(nonBankrupt))
-				ProcessNPCShopping(room, npc, nonBankrupt[targetIdx], npcIdx)
+				playerID = nonBankrupt[targetIdx]
 			}
-			continue
 		}
-
+	} else {
 		visitOrder := npcRand.Perm(len(playerIDs))
 		shopsVisited := 0
 
@@ -204,39 +228,68 @@ func ProcessBusinessPhase(room *models.Room) {
 				break
 			}
 
-			playerID := playerIDs[idx]
-			player := room.Players[playerID]
+			candidateID := playerIDs[idx]
+			candidate := room.Players[candidateID]
 
-			if player.IsBankrupt {
+			if candidate.IsBankrupt {
 				continue
 			}
 
 			visitRoll := npcRand.Float64()
-			adjustedBonus := player.AttractionBonus
+			adjustedBonus := candidate.AttractionBonus
 			if shopsVisited == 0 {
 				adjustedBonus = 1.0
 			}
-			if visitRoll > adjustedBonus {
+			repLevel := models.GetReputationLevel(candidate.Reputation)
+			visitBonus := models.GetReputationVisitBonus(repLevel)
+			finalThreshold := adjustedBonus + visitBonus
+			if finalThreshold < 0 {
+				finalThreshold = 0
+			}
+			if visitRoll > finalThreshold {
 				continue
 			}
 
 			shopsVisited++
-			if ProcessNPCShopping(room, npc, playerID, npcIdx) {
-				break
-			}
+			playerID = candidateID
+			break
 		}
 	}
+
+	if playerID == "" {
+		return nil, rm.popLogs(room), room.NPCIndex < len(room.NPCsThisWeek)
+	}
+
+	bargain, logs, hasMore := rm.processSingleNPCShopping(room, npc, playerID, npcIdx)
+	if logs != nil {
+		room.BusinessLogs = append(room.BusinessLogs, logs...)
+	}
+	return bargain, rm.popLogs(room), hasMore || room.NPCIndex < len(room.NPCsThisWeek)
 }
 
-func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string, npcIdx int) bool {
+func (rm *RoomManager) popLogs(room *models.Room) []models.BusinessLogEntry {
+	if len(room.BusinessLogs) == 0 {
+		return nil
+	}
+	logs := room.BusinessLogs
+	room.BusinessLogs = make([]models.BusinessLogEntry, 0)
+	return logs
+}
+
+func (rm *RoomManager) processSingleNPCShopping(room *models.Room, npc models.NPC, playerID string, npcIdx int) (*models.BargainRequest, []models.BusinessLogEntry, bool) {
 	player := room.Players[playerID]
 	if player == nil || player.IsBankrupt {
-		return false
+		return nil, nil, false
 	}
 
 	npcSeed := room.Seed + int64(room.CurrentWeek)*7000 + int64(npcIdx)*50
 	npcRand := NewSeededRand(npcSeed)
-	budget := npc.Budget
+
+	repLevel := models.GetReputationLevel(player.Reputation)
+	budgetBonus := models.GetReputationBudgetBonus(repLevel)
+	budget := int(float64(npc.Budget) * (1.0 + budgetBonus))
+
+	logs := make([]models.BusinessLogEntry, 0)
 
 	allSlots := make([]*models.ShelfSlot, 0)
 	for i := range player.Shelves {
@@ -325,19 +378,193 @@ func ProcessNPCShopping(room *models.Room, npc models.NPC, playerID string, npcI
 		}
 
 		if npcRand.Float64() < prob {
+			qualityBasePrice := models.CalculatePrice(itemType.BasePrice, slot.Item.Quality)
+
+			if npcRand.Float64() < 0.2 {
+				discountPct := 0.1 + npcRand.Float64()*0.15
+				bargainedPrice := int(float64(slot.Price) * (1.0 - discountPct))
+				if bargainedPrice < 1 {
+					bargainedPrice = 1
+				}
+
+				bargainID := models.NewID()
+				bargain := &models.BargainRequest{
+					ID:             bargainID,
+					NPCID:          npc.ID,
+					NPCName:        npc.Name,
+					NPCClass:       npc.Class,
+					ShelfID:        slot.ID,
+					ItemTypeID:     slot.Item.TypeID,
+					ItemName:       itemType.Name,
+					ItemQuality:    slot.Item.Quality,
+					OriginalPrice:  slot.Price,
+					BargainedPrice: bargainedPrice,
+					ExpiresAt:      time.Now().Unix() + 5,
+				}
+
+				room.PendingBargain = bargain
+				room.BargainNPCIdx = npcIdx
+				room.BargainSlot = slot
+				npcCopy := npc
+				room.BargainNPC = &npcCopy
+				room.BargainPlayerID = playerID
+
+				logs = append(logs, models.BusinessLogEntry{
+					PlayerID: playerID,
+					NPCName:  npc.Name,
+					Message:  "发起了砍价请求",
+					Type:     "bargain_start",
+				})
+
+				return bargain, logs, true
+			}
+
+			priceTier := GetPriceTier(slot.Price, qualityBasePrice)
+			switch priceTier {
+			case PriceTierBargain:
+				player.Reputation++
+			case PriceTierOverpriced:
+				player.Reputation--
+			}
+
 			player.Gold += slot.Price
 			player.WeeklyStats.Income += slot.Price
 			player.WeeklyStats.ItemsSold++
+
+			logs = append(logs, models.BusinessLogEntry{
+				PlayerID: playerID,
+				NPCName:  npc.Name,
+				Message:  "购买了 " + itemType.Name + " (" + models.GetQualityName(slot.Item.Quality) + ")",
+				Type:     "purchase",
+			})
 
 			slot.Item = nil
 			slot.ItemID = ""
 			slot.Price = 0
 
-			return true
+			return nil, logs, true
 		}
 	}
 
-	return false
+	logs = append(logs, models.BusinessLogEntry{
+		PlayerID: playerID,
+		NPCName:  npc.Name,
+		Message:  "离开了店铺",
+		Type:     "leave",
+	})
+
+	return nil, logs, true
+}
+
+func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) []models.BusinessLogEntry {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok || room.PendingBargain == nil {
+		return nil
+	}
+
+	if room.PendingBargain.ID != bargainID {
+		return nil
+	}
+
+	bargain := room.PendingBargain
+	slot := room.BargainSlot
+	npc := room.BargainNPC
+	playerID := room.BargainPlayerID
+	player := room.Players[playerID]
+
+	logs := make([]models.BusinessLogEntry, 0)
+	_ = bargain
+
+	if slot.Item == nil {
+		room.PendingBargain = nil
+		room.BargainSlot = nil
+		room.BargainNPC = nil
+		room.BargainPlayerID = ""
+		return logs
+	}
+
+	itemType, _ := models.GetItemType(slot.Item.TypeID)
+	qualityBasePrice := models.CalculatePrice(itemType.BasePrice, slot.Item.Quality)
+	npcRand := NewSeededRand(room.Seed + int64(room.CurrentWeek)*9000 + int64(room.BargainNPCIdx)*33)
+
+	if accepted {
+		priceTier := GetPriceTier(bargain.BargainedPrice, qualityBasePrice)
+		if priceTier == PriceTierBargain {
+			player.Reputation++
+		}
+		player.Reputation++
+
+		player.Gold += bargain.BargainedPrice
+		player.WeeklyStats.Income += bargain.BargainedPrice
+		player.WeeklyStats.ItemsSold++
+
+		logs = append(logs, models.BusinessLogEntry{
+			PlayerID: playerID,
+			NPCName:  npc.Name,
+			Message:  "砍价成功，购买了 " + itemType.Name,
+			Type:     "bargain_success",
+		})
+
+		slot.Item = nil
+		slot.ItemID = ""
+		slot.Price = 0
+	} else {
+		if npcRand.Float64() < 0.5 {
+			player.Reputation--
+
+			logs = append(logs, models.BusinessLogEntry{
+				PlayerID: playerID,
+				NPCName:  npc.Name,
+				Message:  "砍价被拒绝，愤怒离开",
+				Type:     "bargain_reject_leave",
+			})
+		} else {
+			priceTier := GetPriceTier(bargain.OriginalPrice, qualityBasePrice)
+			switch priceTier {
+			case PriceTierBargain:
+				player.Reputation++
+			case PriceTierOverpriced:
+				player.Reputation--
+			}
+
+			player.Gold += bargain.OriginalPrice
+			player.WeeklyStats.Income += bargain.OriginalPrice
+			player.WeeklyStats.ItemsSold++
+
+			logs = append(logs, models.BusinessLogEntry{
+				PlayerID: playerID,
+				NPCName:  npc.Name,
+				Message:  "接受原价，购买了 " + itemType.Name,
+				Type:     "bargain_reject_buy",
+			})
+
+			slot.Item = nil
+			slot.ItemID = ""
+			slot.Price = 0
+		}
+	}
+
+	room.PendingBargain = nil
+	room.BargainSlot = nil
+	room.BargainNPC = nil
+	room.BargainPlayerID = ""
+
+	room.BusinessLogs = append(room.BusinessLogs, logs...)
+	return rm.popLogs(room)
+}
+
+func (rm *RoomManager) HasPendingBargain(roomID string) *models.BargainRequest {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil
+	}
+	return room.PendingBargain
 }
 
 func ProcessExplorePhase(room *models.Room) {

@@ -78,7 +78,7 @@ func (h *Hub) run() {
 }
 
 func (h *Hub) phaseTimer() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -88,6 +88,63 @@ func (h *Hub) phaseTimer() {
 		for _, room := range rooms {
 			if room.Status != "playing" {
 				continue
+			}
+
+			if room.Phase == models.PhaseBusiness {
+				pending := h.roomManager.HasPendingBargain(room.ID)
+				if pending != nil && now >= pending.ExpiresAt {
+					targetPlayerID := room.BargainPlayerID
+					bargainID := pending.ID
+					logs := h.roomManager.ResolveBargain(room.ID, bargainID, false)
+					h.dispatchBusinessLogs(room.ID, logs)
+
+					h.BroadcastToRoom(room.ID, models.WSMessage{
+						Type:   "room_update",
+						RoomID: room.ID,
+						Data:   room,
+					})
+
+					h.SendToPlayer(room.ID, targetPlayerID, models.WSMessage{
+						Type:   "bargain_timeout",
+						RoomID: room.ID,
+						Data:   bargainID,
+					})
+				}
+
+				if pending == nil {
+					for i := 0; i < 3; i++ {
+						bargain, logs, hasMore := h.roomManager.ProcessNextNPC(room.ID)
+						h.dispatchBusinessLogs(room.ID, logs)
+
+						if bargain != nil {
+							bargainTarget := room.BargainPlayerID
+							h.BroadcastToRoom(room.ID, models.WSMessage{
+								Type:   "room_update",
+								RoomID: room.ID,
+								Data:   room,
+							})
+
+							h.SendToPlayer(room.ID, bargainTarget, models.WSMessage{
+								Type:   "bargain_request",
+								RoomID: room.ID,
+								Data:   bargain,
+							})
+							break
+						}
+
+						if len(logs) > 0 || hasMore {
+							h.BroadcastToRoom(room.ID, models.WSMessage{
+								Type:   "room_update",
+								RoomID: room.ID,
+								Data:   room,
+							})
+						}
+
+						if !hasMore {
+							break
+						}
+					}
+				}
 			}
 
 			if now >= room.PhaseEndTime {
@@ -122,6 +179,25 @@ func (h *Hub) phaseTimer() {
 	}
 }
 
+func (h *Hub) dispatchBusinessLogs(roomID string, logs []models.BusinessLogEntry) {
+	if logs == nil || len(logs) == 0 {
+		return
+	}
+	for _, log := range logs {
+		msg := log.NPCName + ": " + log.Message
+		h.BroadcastToRoom(roomID, models.WSMessage{
+			Type:     "business_log",
+			RoomID:   roomID,
+			PlayerID: log.PlayerID,
+			Data: map[string]interface{}{
+				"message": msg,
+				"type":    log.Type,
+				"npcName": log.NPCName,
+			},
+		})
+	}
+}
+
 func (h *Hub) calculateResults(room *models.Room) []models.GamePlayerResult {
 	results := make([]models.GamePlayerResult, 0, len(room.Players))
 
@@ -152,6 +228,25 @@ func (h *Hub) calculateResults(room *models.Room) []models.GamePlayerResult {
 
 func (h *Hub) BroadcastToRoom(roomID string, message models.WSMessage) {
 	h.broadcast <- message
+}
+
+func (h *Hub) SendToPlayer(roomID, playerID string, message models.WSMessage) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if clients, ok := h.clients[roomID]; ok {
+		for client := range clients {
+			if client.PlayerID == playerID {
+				select {
+				case client.Send <- message:
+				default:
+					close(client.Send)
+					delete(clients, client)
+				}
+				return
+			}
+		}
+	}
 }
 
 func (c *Client) ReadPump(hub *Hub) {
@@ -339,5 +434,53 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 			PlayerID: msg.PlayerID,
 			Data:     msg.Data,
 		})
+
+	case "bargain_accept":
+		var data struct {
+			BargainID string `json:"bargainId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		if data.BargainID != "" {
+			logs := h.roomManager.ResolveBargain(msg.RoomID, data.BargainID, true)
+			h.dispatchBusinessLogs(msg.RoomID, logs)
+
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "bargain_resolved",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"bargainId": data.BargainID, "accepted": true},
+			})
+		}
+
+	case "bargain_reject":
+		var data struct {
+			BargainID string `json:"bargainId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		if data.BargainID != "" {
+			logs := h.roomManager.ResolveBargain(msg.RoomID, data.BargainID, false)
+			h.dispatchBusinessLogs(msg.RoomID, logs)
+
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "bargain_resolved",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"bargainId": data.BargainID, "accepted": false},
+			})
+		}
 	}
 }

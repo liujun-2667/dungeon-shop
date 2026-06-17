@@ -107,6 +107,7 @@ type PlayerState struct {
 	UpgradeInvestment int `json:"upgradeInvestment"`
 	WeeklyStats  WeeklyStats `json:"weeklyStats"`
 	AssetHistory []int       `json:"assetHistory"`
+	Reputation  int         `json:"reputation"`
 }
 
 type BranchShop struct {
@@ -187,6 +188,21 @@ type Room struct {
 	ExplorationMissions []ExplorationMission `json:"explorationMissions"`
 	Status       string                 `json:"status"`
 	CreatedAt    time.Time              `json:"createdAt"`
+
+	NPCIndex       int                    `json:"-"`
+	PendingBargain *BargainRequest        `json:"-"`
+	BargainNPCIdx  int                    `json:"-"`
+	BargainSlot    *ShelfSlot             `json:"-"`
+	BargainNPC     *NPC                   `json:"-"`
+	BargainPlayerID string                 `json:"-"`
+	BusinessLogs   []BusinessLogEntry     `json:"-"`
+}
+
+type BusinessLogEntry struct {
+	PlayerID string `json:"playerId"`
+	NPCName  string `json:"npcName"`
+	Message  string `json:"message"`
+	Type     string `json:"type"`
 }
 
 type PlayerProfile struct {
@@ -222,6 +238,76 @@ type WSMessage struct {
 	PlayerID string     `json:"playerId,omitempty"`
 }
 
+type BargainRequest struct {
+	ID          string `json:"id"`
+	NPCID       string `json:"npcId"`
+	NPCName     string `json:"npcName"`
+	NPCClass    NPCClass `json:"npcClass"`
+	ShelfID     string `json:"shelfId"`
+	ItemTypeID  string `json:"itemTypeId"`
+	ItemName    string `json:"itemName"`
+	ItemQuality Quality `json:"itemQuality"`
+	OriginalPrice int `json:"originalPrice"`
+	BargainedPrice int `json:"bargainedPrice"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Resolved    bool   `json:"-"`
+}
+
+type ReputationLevel string
+
+const (
+	ReputationHonest  ReputationLevel = "honest"
+	ReputationNormal  ReputationLevel = "normal"
+	ReputationShady   ReputationLevel = "shady"
+)
+
+const (
+	ReputationHonestThreshold = 5
+	ReputationShadyThreshold  = -5
+)
+
+func GetReputationLevel(reputation int) ReputationLevel {
+	if reputation >= ReputationHonestThreshold {
+		return ReputationHonest
+	} else if reputation <= ReputationShadyThreshold {
+		return ReputationShady
+	}
+	return ReputationNormal
+}
+
+func GetReputationLabel(level ReputationLevel) string {
+	switch level {
+	case ReputationHonest:
+		return "信誉商铺"
+	case ReputationShady:
+		return "黑心店铺"
+	default:
+		return "普通店铺"
+	}
+}
+
+func GetReputationVisitBonus(level ReputationLevel) float64 {
+	switch level {
+	case ReputationHonest:
+		return 0.3
+	case ReputationShady:
+		return -0.4
+	default:
+		return 0.0
+	}
+}
+
+func GetReputationBudgetBonus(level ReputationLevel) float64 {
+	switch level {
+	case ReputationHonest:
+		return 0.1
+	case ReputationShady:
+		return -0.2
+	default:
+		return 0.0
+	}
+}
+
 func NewID() string {
 	return uuid.New().String()
 }
@@ -253,6 +339,7 @@ func NewPlayerState(name, shopName string) *PlayerState {
 		UpgradeInvestment: 0,
 		WeeklyStats:       WeeklyStats{},
 		AssetHistory:      []int{500},
+		Reputation:        0,
 	}
 }
 

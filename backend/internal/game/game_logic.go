@@ -386,7 +386,9 @@ func CheckBankruptcy(player *models.PlayerState) bool {
 	return false
 }
 
-func ProcessExpiredItems(player *models.PlayerState, currentWeek int) {
+func ProcessExpiredItems(player *models.PlayerState, currentWeek int) int {
+	expiredOnShelf := 0
+
 	validItems := make([]models.Item, 0)
 	for _, item := range player.Warehouse {
 		itemType, ok := models.GetItemType(item.TypeID)
@@ -400,12 +402,50 @@ func ProcessExpiredItems(player *models.PlayerState, currentWeek int) {
 		if player.Shelves[i].Item != nil {
 			itemType, ok := models.GetItemType(player.Shelves[i].Item.TypeID)
 			if ok && itemType.HasShelfLife && player.Shelves[i].Item.ExpiresWeek <= currentWeek {
+				expiredOnShelf++
 				player.Shelves[i].Item = nil
 				player.Shelves[i].ItemID = ""
 				player.Shelves[i].Price = 0
 			}
 		}
 	}
+
+	for bi := range player.BranchShops {
+		for i := range player.BranchShops[bi].Shelves {
+			if player.BranchShops[bi].Shelves[i].Item != nil {
+				itemType, ok := models.GetItemType(player.BranchShops[bi].Shelves[i].Item.TypeID)
+				if ok && itemType.HasShelfLife && player.BranchShops[bi].Shelves[i].Item.ExpiresWeek <= currentWeek {
+					expiredOnShelf++
+					player.BranchShops[bi].Shelves[i].Item = nil
+					player.BranchShops[bi].Shelves[i].ItemID = ""
+					player.BranchShops[bi].Shelves[i].Price = 0
+				}
+			}
+		}
+	}
+
+	return expiredOnShelf
+}
+
+type PriceTier string
+
+const (
+	PriceTierBargain  PriceTier = "bargain"
+	PriceTierFair     PriceTier = "fair"
+	PriceTierOverpriced PriceTier = "overpriced"
+)
+
+func GetPriceTier(price int, basePrice int) PriceTier {
+	if basePrice <= 0 {
+		return PriceTierFair
+	}
+	ratio := float64(price) / float64(basePrice)
+	if ratio <= 1.2 {
+		return PriceTierBargain
+	} else if ratio >= 1.4 {
+		return PriceTierOverpriced
+	}
+	return PriceTierFair
 }
 
 func ShuffleNPCs(npcs []models.NPC, seed int64, week int) []models.NPC {

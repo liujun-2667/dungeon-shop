@@ -22,6 +22,7 @@ export const phaseEndTime = writable(0);
 export const eventLog = writable([]);
 export const gameResults = writable(null);
 export const isConnected = writable(false);
+export const bargainRequests = writable([]);
 
 export const currentPlayer = derived([room, currentUser], ([$room, $user]) => {
   if (!$room || !$user.playerId) return null;
@@ -39,6 +40,8 @@ export const playerRanking = derived([room, itemTypes], ([$room, $itemTypes]) =>
       gold: p.gold,
       assets: calculateAssets(p, $itemTypes),
       isBankrupt: p.isBankrupt,
+      reputation: p.reputation ?? 0,
+      shelves: p.shelves || [],
     }))
     .sort((a, b) => b.assets - a.assets);
 });
@@ -105,4 +108,49 @@ export function clearUser() {
   localStorage.removeItem('playerId');
   localStorage.removeItem('playerName');
   localStorage.removeItem('shopName');
+}
+
+export const REPUTATION_HONEST_THRESHOLD = 5;
+export const REPUTATION_SHADY_THRESHOLD = -5;
+
+export function getReputationLevel(reputation) {
+  if (reputation >= REPUTATION_HONEST_THRESHOLD) return 'honest';
+  if (reputation <= REPUTATION_SHADY_THRESHOLD) return 'shady';
+  return 'normal';
+}
+
+export function getReputationLabel(level) {
+  switch (level) {
+    case 'honest': return '信誉商铺';
+    case 'shady': return '黑心店铺';
+    default: return '普通店铺';
+  }
+}
+
+export function getReputationDescription(level) {
+  switch (level) {
+    case 'honest': return 'NPC到店概率+30%，愿意多花10%预算';
+    case 'shady': return 'NPC到店概率-40%，预算上限压低20%';
+    default: return '无额外加成或惩罚';
+  }
+}
+
+export function getReputationClass(level) {
+  switch (level) {
+    case 'honest': return 'reputation-honest';
+    case 'shady': return 'reputation-shady';
+    default: return 'reputation-normal';
+  }
+}
+
+export function addBargainRequest(request) {
+  bargainRequests.update(list => [...list, request]);
+}
+
+export function removeBargainRequest(bargainId) {
+  bargainRequests.update(list => list.filter(b => b.id !== bargainId));
+}
+
+export function clearBargainRequests() {
+  bargainRequests.set([]);
 }

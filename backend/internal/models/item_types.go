@@ -198,3 +198,18 @@ func (q Quality) Rank() int {
 func (i *Item) QualityRank() int {
 	return i.Quality.Rank()
 }
+
+func GetQualityName(q Quality) string {
+	switch q {
+	case QualityCommon:
+		return "普通"
+	case QualityFine:
+		return "精良"
+	case QualityRare:
+		return "稀有"
+	case QualityLegendary:
+		return "传说"
+	default:
+		return "普通"
+	}
+}
