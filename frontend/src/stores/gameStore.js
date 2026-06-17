@@ -90,10 +90,10 @@ export function calculateFinalAssets(player, itemTypesMap) {
 }
 
 export function addLog(message, type = 'info') {
-  eventLog.update(logs => [
-    { id: Date.now(), message, type, time: new Date().toLocaleTimeString() },
-    ...logs.slice(0, 50)
-  ]);
+  eventLog.update(logs => {
+    const newLogs = [...logs, { id: Date.now() + Math.random(), message, type, time: new Date().toLocaleTimeString() }];
+    return newLogs.slice(-50);
+  });
 }
 
 export function setUser(playerId, playerName, shopName) {

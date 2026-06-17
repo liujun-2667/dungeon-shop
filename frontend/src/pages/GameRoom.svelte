@@ -168,7 +168,7 @@
 
   function updateCountdown() {
     const now = Math.floor(Date.now() / 1000);
-    countdown = Math.max(0, $phaseEndTime - now);
+    countdown = Math.max(0, get(phaseEndTime) - now);
   }
 
   async function startGame() {
@@ -216,8 +216,8 @@
   }
 
   function handleDrop(shelf) {
-    if (draggedItem && $currentPhase === 'purchase') {
-      const itemType = $itemTypes[draggedItem.typeId];
+    if (draggedItem && get(currentPhase) === 'purchase') {
+      const itemType = get(itemTypes)[draggedItem.typeId];
       const basePrice = itemType.basePrice;
       const qualityMult = { common: 1, fine: 1.5, rare: 2.5, legendary: 4 }[draggedItem.quality];
       const suggestedPrice = Math.floor(basePrice * qualityMult * 1.2);
@@ -246,7 +246,7 @@
       <h2>{$room?.name || '加载中...'}</h2>
       <div class="game-meta">
         {#if $room?.status === 'playing'}
-          <span class="week">第 {$currentWeek}/{$totalWeeks} 周</span>
+          <span class="week">第 {currentWeek}/{totalWeeks} 周</span>
           <span class="phase phase-{$currentPhase}">{phaseNames[$currentPhase]}</span>
           <span class="countdown">⏱️ {countdown}s</span>
         {:else if $room?.status === 'waiting'}

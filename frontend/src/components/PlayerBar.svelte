@@ -1,4 +1,5 @@
 <script>
+  import { get } from 'svelte/store';
   import { playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass } from '../stores/gameStore.js';
 
   const qualityNames = {
@@ -9,7 +10,7 @@
   };
 
   function getItemName(typeId) {
-    return $itemTypes[typeId]?.name || typeId;
+    return get(itemTypes)[typeId]?.name || typeId;
   }
 
   function getReputationTooltip(reputation) {

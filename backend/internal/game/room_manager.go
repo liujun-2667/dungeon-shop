@@ -378,7 +378,7 @@ func (rm *RoomManager) processSingleNPCShopping(room *models.Room, npc models.NP
 		}
 
 		if npcRand.Float64() < prob {
-			qualityBasePrice := models.CalculatePrice(itemType.BasePrice, slot.Item.Quality)
+			basePrice := itemType.BasePrice
 
 			if npcRand.Float64() < 0.2 {
 				discountPct := 0.1 + npcRand.Float64()*0.15
@@ -419,7 +419,7 @@ func (rm *RoomManager) processSingleNPCShopping(room *models.Room, npc models.NP
 				return bargain, logs, true
 			}
 
-			priceTier := GetPriceTier(slot.Price, qualityBasePrice)
+			priceTier := GetPriceTier(slot.Price, basePrice)
 			switch priceTier {
 			case PriceTierBargain:
 				player.Reputation++
@@ -487,7 +487,7 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 	}
 
 	itemType, _ := models.GetItemType(slot.Item.TypeID)
-	qualityBasePrice := models.CalculatePrice(itemType.BasePrice, slot.Item.Quality)
+	basePrice := itemType.BasePrice
 	npcRand := NewSeededRand(room.Seed + int64(room.CurrentWeek)*9000 + int64(room.BargainNPCIdx)*33)
 
 	if accepted {
@@ -518,7 +518,7 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 				Type:     "bargain_reject_leave",
 			})
 		} else {
-			priceTier := GetPriceTier(bargain.OriginalPrice, qualityBasePrice)
+			priceTier := GetPriceTier(bargain.OriginalPrice, basePrice)
 			switch priceTier {
 			case PriceTierBargain:
 				player.Reputation++

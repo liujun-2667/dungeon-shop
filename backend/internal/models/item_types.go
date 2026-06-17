@@ -172,7 +172,10 @@ func GetItemType(typeID string) (ItemType, bool) {
 }
 
 func CalculatePrice(basePrice int, quality Quality) int {
-	mult := QualityMultiplier[quality]
+	mult, ok := QualityMultiplier[quality]
+	if !ok {
+		mult = 1.0
+	}
 	return int(float64(basePrice) * mult)
 }
 
