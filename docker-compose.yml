@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: dungeon-shop-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+  mongo:
+    image: mongo:7
+    container_name: dungeon-shop-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: dungeon_shop
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dungeon-shop-backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - mongo
+    environment:
+      - REDIS_ADDR=redis:6379
+      - MONGO_URI=mongodb://mongo:27017
+      - SERVER_PORT=8080
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: dungeon-shop-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8080
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: dungeon-shop-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - frontend
+      - backend
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  redis-data:
+  mongo-data:
