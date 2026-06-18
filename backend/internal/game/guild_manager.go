@@ -118,7 +118,7 @@ func (rm *RoomManager) JoinGuild(roomID, playerID, guildID string) (*models.Guil
 	}
 
 	if banExpireTime, banned := guild.BannedPlayers[playerID]; banned {
-		banDurationWeeks := int64(models.GuildKickBanDuration)
+		banDurationWeeks := int(models.GuildKickBanDuration)
 		weeksSinceBan := (room.CurrentWeek - int(banExpireTime/int64(models.GuildKickBanDuration)))
 		if weeksSinceBan < banDurationWeeks {
 			return nil, "你被该公会踢出未满2周，暂不能加入"
