@@ -40,9 +40,11 @@ export const playerRanking = derived([room, itemTypes], ([$room, $itemTypes]) =>
       shopName: p.shopName,
       gold: p.gold,
       frozenGold: p.frozenGold || 0,
+      frozenDeposit: p.frozenDeposit || 0,
       assets: calculateAssets(p, $itemTypes),
       isBankrupt: p.isBankrupt,
       reputation: p.reputation ?? 0,
+      auctionReputation: p.auctionReputation ?? 100,
       shelves: p.shelves || [],
     }))
     .sort((a, b) => b.assets - a.assets);
@@ -205,4 +207,93 @@ export function getAuctionStatusText(status) {
     case 'cancelled': return '已取消';
     default: return status;
   }
+}
+
+export const AUCTION_REP_INITIAL = 100;
+export const AUCTION_REP_HONEST_MIN = 80;
+export const AUCTION_REP_NORMAL_MIN = 60;
+export const AUCTION_REP_FORBID_MIN = 40;
+
+export function getAuctionReputationColor(reputation) {
+  if (reputation >= AUCTION_REP_HONEST_MIN) return '#10b981';
+  if (reputation >= AUCTION_REP_NORMAL_MIN) return '#ffffff';
+  return '#ef4444';
+}
+
+export function getAuctionReputationTier(reputation) {
+  if (reputation >= AUCTION_REP_HONEST_MIN) return '信誉极佳';
+  if (reputation >= AUCTION_REP_NORMAL_MIN) return '信誉良好';
+  if (reputation >= AUCTION_REP_FORBID_MIN) return '信誉较差';
+  return '信誉极差';
+}
+
+export function getAuctionListingFeeRate(reputation) {
+  if (reputation >= AUCTION_REP_HONEST_MIN) return 0.03;
+  if (reputation >= AUCTION_REP_NORMAL_MIN) return 0.05;
+  return 0.08;
+}
+
+export function getAuctionListingFeeTier(reputation) {
+  if (reputation >= AUCTION_REP_HONEST_MIN) return 'honest';
+  if (reputation >= AUCTION_REP_NORMAL_MIN) return 'normal';
+  if (reputation >= AUCTION_REP_FORBID_MIN) return 'shady';
+  return 'forbid';
+}
+
+export function canListAuction(reputation) {
+  return reputation >= AUCTION_REP_FORBID_MIN;
+}
+
+export function getPlayerAuctionReputation(room, playerId) {
+  if (!room || !room.players || !playerId) return 100;
+  const player = room.players[playerId];
+  return player?.auctionReputation ?? 100;
+}
+
+export function getMyAuctionHistory(room, playerId) {
+  if (!room || !room.auctions || !playerId) return [];
+  return room.auctions
+    .filter(a => a.sellerId === playerId && a.status !== 'active')
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 20)
+    .map(a => {
+      const buyer = a.status === 'sold' ? a.highestBidderName : '无人竞拍';
+      let repChange = 0;
+      if (a.status === 'sold') repChange = 2;
+      else if (a.status === 'expired') repChange = -3;
+      else if (a.status === 'cancelled') repChange = -1;
+      return {
+        id: a.id,
+        itemTypeName: a.itemTypeName,
+        itemQuality: a.item?.quality,
+        finalPrice: a.currentPrice,
+        buyer,
+        repChange,
+        status: a.status,
+        createdAt: a.createdAt,
+      };
+    });
+}
+
+export function getMyBidHistory(room, playerId) {
+  if (!room || !room.auctions || !playerId) return [];
+  return room.auctions
+    .filter(a => a.status !== 'active' && a.bidHistory && a.bidHistory.some(b => b.bidderId === playerId))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 20)
+    .map(a => {
+      const myBids = a.bidHistory.filter(b => b.bidderId === playerId);
+      const myMaxBid = myBids.length > 0 ? Math.max(...myBids.map(b => b.amount)) : 0;
+      const won = a.status === 'sold' && a.highestBidderId === playerId;
+      return {
+        id: a.id,
+        itemTypeName: a.itemTypeName,
+        itemQuality: a.item?.quality,
+        myMaxBid,
+        finalPrice: a.currentPrice,
+        won,
+        status: a.status,
+        createdAt: a.createdAt,
+      };
+    });
 }

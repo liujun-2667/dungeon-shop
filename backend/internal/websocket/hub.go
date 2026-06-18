@@ -189,6 +189,8 @@ func (h *Hub) phaseTimer() {
 					Data:   room,
 				})
 
+				h.broadcastReputationUpdates(room.ID, room)
+
 				if room.Status == "finished" {
 					results := h.calculateResults(room)
 					h.BroadcastToRoom(room.ID, models.WSMessage{
@@ -544,6 +546,7 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 		dataBytes, _ := json.Marshal(msg.Data)
 		json.Unmarshal(dataBytes, &data)
 
+		deposit := int(float64(data.BidAmount) * 0.10)
 		auction, errMsg := h.roomManager.PlaceBid(msg.RoomID, msg.PlayerID, data.AuctionID, data.BidAmount)
 		if auction != nil {
 			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
@@ -563,16 +566,19 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 						"itemTypeName":  auction.ItemTypeName,
 					},
 				})
+				h.broadcastReputationUpdates(msg.RoomID, room)
 			} else {
 				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
 					Type:   "bid_update",
 					RoomID: msg.RoomID,
 					Data: map[string]interface{}{
-						"auctionId":     auction.ID,
-						"currentPrice":  auction.CurrentPrice,
-						"highestBidder": auction.HighestBidderName,
-						"itemTypeName":  auction.ItemTypeName,
+						"auctionId":      auction.ID,
+						"currentPrice":   auction.CurrentPrice,
+						"highestBidder":  auction.HighestBidderName,
+						"itemTypeName":   auction.ItemTypeName,
 						"remainingWeeks": auction.EndWeek - room.CurrentWeek,
+						"deposit":        deposit,
+						"bidderId":       msg.PlayerID,
 					},
 				})
 			}
@@ -609,6 +615,7 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 					"itemTypeName":  auction.ItemTypeName,
 				},
 			})
+			h.broadcastReputationUpdates(msg.RoomID, room)
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
 				Type:   "auction_error",
@@ -637,6 +644,7 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 				RoomID: msg.RoomID,
 				Data:   auction.ID,
 			})
+			h.broadcastReputationUpdates(msg.RoomID, room)
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
 				Type:   "auction_error",
@@ -645,4 +653,20 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 			})
 		}
 	}
+}
+
+func (h *Hub) broadcastReputationUpdates(roomID string, room *models.Room) {
+	reputationData := make([]map[string]interface{}, 0)
+	for _, player := range room.Players {
+		reputationData = append(reputationData, map[string]interface{}{
+			"playerId":           player.ID,
+			"auctionReputation":  player.AuctionReputation,
+			"shopReputation":     player.Reputation,
+		})
+	}
+	h.BroadcastToRoom(roomID, models.WSMessage{
+		Type:   "reputation_update",
+		RoomID: roomID,
+		Data:   reputationData,
+	})
 }

@@ -13,6 +13,13 @@
     getMinBid,
     getRemainingWeeks,
     getAuctionStatusText,
+    getAuctionReputationColor,
+    getAuctionListingFeeRate,
+    getAuctionListingFeeTier,
+    canListAuction,
+    getPlayerAuctionReputation,
+    getMyAuctionHistory,
+    getMyBidHistory,
   } from '../stores/gameStore.js';
   import { sendWS } from '../utils/api.js';
 
@@ -21,6 +28,7 @@
   export let ws;
 
   let activeTab = 'browse';
+  let historySubTab = 'active';
   let filterCategory = '';
   let filterQuality = '';
   let sortBy = 'price_asc';
@@ -60,8 +68,14 @@
   $: activeAuctions = getActiveAuctions($room);
   $: myAuctions = getMyAuctions($room, playerId);
   $: myBids = getMyBids($room, playerId);
+  $: myAuctionHistory = getMyAuctionHistory($room, playerId);
+  $: myBidHistory = getMyBidHistory($room, playerId);
   $: availableGold = $currentPlayer?.gold || 0;
   $: frozenGold = $currentPlayer?.frozenGold || 0;
+  $: frozenDeposit = $currentPlayer?.frozenDeposit || 0;
+  $: playerAuctionReputation = $currentPlayer?.auctionReputation ?? 100;
+  $: listingFeeRate = getAuctionListingFeeRate(playerAuctionReputation);
+  $: listingFeeTier = getAuctionListingFeeTier(playerAuctionReputation);
 
   $: filteredAuctions = activeAuctions
     .filter(a => {
@@ -86,7 +100,7 @@
       }
     });
 
-  $: canListAuction = $currentPhase === 'purchase' && !$currentPlayer?.isBankrupt;
+  $: canListAuctionFlag = $currentPhase === 'purchase' && !$currentPlayer?.isBankrupt && canListAuction(playerAuctionReputation);
   $: canBid = ($currentPhase === 'business' || $currentPhase === 'explore') && !$currentPlayer?.isBankrupt;
 
   $: warehouseItems = $currentPlayer?.warehouse || [];
@@ -139,7 +153,7 @@
       return;
     }
 
-    const listingFee = Math.max(1, Math.floor(startingPrice * 0.05));
+    const listingFee = Math.max(1, Math.floor(startingPrice * listingFeeRate));
     if (listingFee > availableGold) {
       alert(`挂单费 ${listingFee}💰 不足`);
       return;
@@ -150,6 +164,10 @@
     createItemId = '';
     createStartingPrice = '';
     createBuyoutPrice = '';
+  }
+
+  function getBidDeposit(amount) {
+    return Math.floor(amount * 0.10);
   }
 
   function close() {
@@ -168,6 +186,12 @@
       <div class="header-info">
         <span class="gold-info">💰 {availableGold}</span>
         <span class="frozen-info">❄️ {frozenGold}</span>
+        {#if frozenDeposit > 0}
+          <span class="deposit-info">🔒 {frozenDeposit}</span>
+        {/if}
+        <span class="rep-info" style="color: {getAuctionReputationColor(playerAuctionReputation)}">
+          🏛️ {playerAuctionReputation}
+        </span>
       </div>
       <button class="close-btn" on:click={close}>×</button>
     </div>
@@ -182,16 +206,27 @@
       <button class="tab-btn" class:active={activeTab === 'my-bids'} on:click={() => activeTab = 'my-bids'}>
         我的竞拍
       </button>
-      {#if canListAuction}
+      {#if canListAuctionFlag}
         <button class="tab-btn btn-list" on:click={() => showCreateForm = !showCreateForm}>
           {showCreateForm ? '取消挂单' : '📦 挂单出售'}
         </button>
       {/if}
     </div>
 
-    {#if showCreateForm && canListAuction}
+    {#if $currentPhase === 'purchase' && !$currentPlayer?.isBankrupt && !canListAuction(playerAuctionReputation)}
+      <div class="create-form card forbid-card">
+        <h3>⚠️ 无法挂单</h3>
+        <p class="forbid-hint">拍卖行信誉分不足40分（当前 {playerAuctionReputation}），禁止挂单拍卖，仍可参与竞拍。</p>
+      </div>
+    {/if}
+    {#if showCreateForm && canListAuctionFlag}
       <div class="create-form card">
-        <h3>挂单出售</h3>
+        <h3>挂单出售
+          <span class="fee-tier tier-{listingFeeTier}">
+            费率 {(listingFeeRate * 100).toFixed(0)}%
+            ({listingFeeTier === 'honest' ? '优惠' : listingFeeTier === 'shady' ? '惩罚' : '标准'})
+          </span>
+        </h3>
         <div class="form-row">
           <label>选择商品:</label>
           <select bind:value={createItemId}>
@@ -207,7 +242,7 @@
           <label>起拍价:</label>
           <input type="number" min="1" bind:value={createStartingPrice} placeholder="最低起拍价" />
           {#if createStartingPrice}
-            <span class="fee-hint">挂单费: {Math.max(1, Math.floor(parseInt(createStartingPrice) * 0.05))}💰</span>
+            <span class="fee-hint">挂单费: {Math.max(1, Math.floor(parseInt(createStartingPrice) * listingFeeRate))}💰</span>
           {/if}
         </div>
         <div class="form-row">
@@ -262,7 +297,13 @@
                       {categoryNames[getItemInfo(auction.item.typeId).category] || ''}
                     </span>
                   </div>
-                  <div class="auction-seller">卖家: {auction.sellerShopName}</div>
+                  <div class="auction-seller">
+                    卖家: {auction.sellerShopName}
+                    <span class="seller-reputation" 
+                          style="color: {getAuctionReputationColor(getPlayerAuctionReputation($room, auction.sellerId))}">
+                      🏛️ {getPlayerAuctionReputation($room, auction.sellerId)}
+                    </span>
+                  </div>
                   <div class="auction-prices">
                     <span class="price-label">起拍: {auction.startingPrice}💰</span>
                     <span class="price-current">
@@ -302,102 +343,189 @@
         {/if}
 
       {:else if activeTab === 'my-auctions'}
-        {#if myAuctions.length === 0}
-          <p class="empty">你还没有挂出任何商品</p>
-        {:else}
-          <div class="auction-list">
-            {#each myAuctions as auction}
-              <div class="auction-card quality-{auction.item.quality}">
-                <div class="auction-main">
-                  <div class="auction-item-info">
-                    <span class="item-name quality-{auction.item.quality}">
-                      {getItemInfo(auction.item.typeId).name}
-                    </span>
-                    <span class="item-quality quality-{auction.item.quality}">
-                      {qualityNames[auction.item.quality]}
-                    </span>
-                    <span class="status-badge status-{auction.status}">
-                      {getAuctionStatusText(auction.status)}
-                    </span>
-                  </div>
-                  <div class="auction-prices">
-                    <span class="price-label">起拍: {auction.startingPrice}💰</span>
-                    <span class="price-current">
-                      当前: {auction.currentPrice}💰
-                      {#if auction.highestBidderName}
-                        <span class="bidder">({auction.highestBidderName})</span>
-                      {/if}
-                    </span>
-                    {#if auction.buyoutPrice > 0}
-                      <span class="price-buyout">一口价: {auction.buyoutPrice}💰</span>
-                    {/if}
-                    {#if auction.status === 'active'}
-                      <span class="price-remaining">剩余 {getRemainingWeeks(auction, currentWeek)} 周</span>
-                    {/if}
-                  </div>
-                  {#if auction.bidHistory && auction.bidHistory.length > 0}
-                    <div class="bid-history">
-                      <span class="bid-count">出价次数: {auction.bidHistory.length}</span>
+        <div class="sub-tab-bar">
+          <button class="sub-tab-btn" class:active={historySubTab === 'active'} on:click={() => historySubTab = 'active'}>
+            进行中
+          </button>
+          <button class="sub-tab-btn" class:active={historySubTab === 'history'} on:click={() => historySubTab = 'history'}>
+            历史记录
+          </button>
+        </div>
+        {#if historySubTab === 'active'}
+          {#if myAuctions.filter(a => a.status === 'active').length === 0}
+            <p class="empty">暂无进行中的拍卖</p>
+          {:else}
+            <div class="auction-list">
+              {#each myAuctions.filter(a => a.status === 'active') as auction}
+                <div class="auction-card quality-{auction.item.quality}">
+                  <div class="auction-main">
+                    <div class="auction-item-info">
+                      <span class="item-name quality-{auction.item.quality}">
+                        {getItemInfo(auction.item.typeId).name}
+                      </span>
+                      <span class="item-quality quality-{auction.item.quality}">
+                        {qualityNames[auction.item.quality]}
+                      </span>
+                      <span class="status-badge status-{auction.status}">
+                        {getAuctionStatusText(auction.status)}
+                      </span>
                     </div>
-                  {/if}
+                    <div class="auction-prices">
+                      <span class="price-label">起拍: {auction.startingPrice}💰</span>
+                      <span class="price-current">
+                        当前: {auction.currentPrice}💰
+                        {#if auction.highestBidderName}
+                          <span class="bidder">({auction.highestBidderName})</span>
+                        {/if}
+                      </span>
+                      {#if auction.buyoutPrice > 0}
+                        <span class="price-buyout">一口价: {auction.buyoutPrice}💰</span>
+                      {/if}
+                      <span class="price-remaining">剩余 {getRemainingWeeks(auction, currentWeek)} 周</span>
+                    </div>
+                    {#if auction.bidHistory && auction.bidHistory.length > 0}
+                      <div class="bid-history">
+                        <span class="bid-count">出价次数: {auction.bidHistory.length}</span>
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="auction-actions">
+                    {#if !auction.bidHistory || auction.bidHistory.length === 0}
+                      <button class="btn btn-danger small" on:click={() => cancelAuction(auction)}>
+                        取消
+                      </button>
+                    {/if}
+                  </div>
                 </div>
-                <div class="auction-actions">
-                  {#if auction.status === 'active' && (!auction.bidHistory || auction.bidHistory.length === 0)}
-                    <button class="btn btn-danger small" on:click={() => cancelAuction(auction)}>
-                      取消
-                    </button>
-                  {/if}
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          {#if myAuctionHistory.length === 0}
+            <p class="empty">暂无历史拍卖记录</p>
+          {:else}
+            <div class="auction-list">
+              {#each myAuctionHistory as record}
+                <div class="auction-card history-card quality-{record.itemQuality}">
+                  <div class="auction-main">
+                    <div class="auction-item-info">
+                      <span class="item-name quality-{record.itemQuality}">
+                        {record.itemTypeName}
+                      </span>
+                      <span class="item-quality quality-{record.itemQuality}">
+                        {qualityNames[record.itemQuality]}
+                      </span>
+                      <span class="status-badge status-{record.status}">
+                        {getAuctionStatusText(record.status)}
+                      </span>
+                    </div>
+                    <div class="auction-prices">
+                      <span class="price-current">成交价: {record.finalPrice}💰</span>
+                      <span class="price-buyer">买家: {record.buyer}</span>
+                    </div>
+                    <div class="rep-change-row">
+                      信誉变动: 
+                      <span class="rep-change" style="color: {record.repChange >= 0 ? '#10b981' : '#ef4444'}">
+                        {record.repChange > 0 ? '+' : ''}{record.repChange}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
 
       {:else if activeTab === 'my-bids'}
-        {#if myBids.length === 0}
-          <p class="empty">你还没有参与任何竞拍</p>
-        {:else}
-          <div class="auction-list">
-            {#each myBids as auction}
-              <div class="auction-card quality-{auction.item.quality}">
-                <div class="auction-main">
-                  <div class="auction-item-info">
-                    <span class="item-name quality-{auction.item.quality}">
-                      {getItemInfo(auction.item.typeId).name}
-                    </span>
-                    <span class="item-quality quality-{auction.item.quality}">
-                      {qualityNames[auction.item.quality]}
-                    </span>
+        <div class="sub-tab-bar">
+          <button class="sub-tab-btn" class:active={historySubTab === 'active'} on:click={() => historySubTab = 'active'}>
+            进行中
+          </button>
+          <button class="sub-tab-btn" class:active={historySubTab === 'history'} on:click={() => historySubTab = 'history'}>
+            历史记录
+          </button>
+        </div>
+        {#if historySubTab === 'active'}
+          {#if myBids.length === 0}
+            <p class="empty">你还没有参与任何竞拍</p>
+          {:else}
+            <div class="auction-list">
+              {#each myBids as auction}
+                <div class="auction-card quality-{auction.item.quality}">
+                  <div class="auction-main">
+                    <div class="auction-item-info">
+                      <span class="item-name quality-{auction.item.quality}">
+                        {getItemInfo(auction.item.typeId).name}
+                      </span>
+                      <span class="item-quality quality-{auction.item.quality}">
+                        {qualityNames[auction.item.quality]}
+                      </span>
+                    </div>
+                    <div class="auction-seller">卖家: {auction.sellerShopName}</div>
+                    <div class="auction-prices">
+                      <span class="price-current">
+                        当前价: {auction.currentPrice}💰
+                      </span>
+                      {#if auction.highestBidderId === playerId}
+                        <span class="bid-status leading">🏆 你的出价领先</span>
+                      {:else}
+                        <span class="bid-status outbid">⚠️ 你已被超过</span>
+                      {/if}
+                      <span class="price-remaining">剩余 {getRemainingWeeks(auction, currentWeek)} 周</span>
+                    </div>
                   </div>
-                  <div class="auction-seller">卖家: {auction.sellerShopName}</div>
-                  <div class="auction-prices">
-                    <span class="price-current">
-                      当前价: {auction.currentPrice}💰
-                    </span>
-                    {#if auction.highestBidderId === playerId}
-                      <span class="bid-status leading">🏆 你的出价领先</span>
-                    {:else}
-                      <span class="bid-status outbid">⚠️ 你已被超过</span>
-                    {/if}
-                    <span class="price-remaining">剩余 {getRemainingWeeks(auction, currentWeek)} 周</span>
-                  </div>
-                </div>
-                <div class="auction-actions">
-                  {#if canBid}
-                    <button class="btn btn-primary small" on:click={() => openBidConfirm(auction)}>
-                      再次出价
-                    </button>
-                    {#if auction.buyoutPrice > 0}
-                      <button class="btn btn-secondary small" on:click={() => executeBuyout(auction)}
-                        disabled={availableGold < auction.buyoutPrice}>
-                        一口价
+                  <div class="auction-actions">
+                    {#if canBid}
+                      <button class="btn btn-primary small" on:click={() => openBidConfirm(auction)}>
+                        再次出价
                       </button>
+                      {#if auction.buyoutPrice > 0}
+                        <button class="btn btn-secondary small" on:click={() => executeBuyout(auction)}
+                          disabled={availableGold < auction.buyoutPrice}>
+                          一口价
+                        </button>
+                      {/if}
                     {/if}
-                  {/if}
+                  </div>
                 </div>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          {#if myBidHistory.length === 0}
+            <p class="empty">暂无历史竞拍记录</p>
+          {:else}
+            <div class="auction-list">
+              {#each myBidHistory as record}
+                <div class="auction-card history-card quality-{record.itemQuality}">
+                  <div class="auction-main">
+                    <div class="auction-item-info">
+                      <span class="item-name quality-{record.itemQuality}">
+                        {record.itemTypeName}
+                      </span>
+                      <span class="item-quality quality-{record.itemQuality}">
+                        {qualityNames[record.itemQuality]}
+                      </span>
+                      <span class="status-badge status-{record.status}">
+                        {getAuctionStatusText(record.status)}
+                      </span>
+                    </div>
+                    <div class="auction-prices">
+                      <span class="price-label">我的最高出价: {record.myMaxBid}💰</span>
+                      <span class="price-current">成交价: {record.finalPrice}💰</span>
+                      {#if record.won}
+                        <span class="bid-status leading">🏆 已竞得</span>
+                      {:else if record.status === 'sold'}
+                        <span class="bid-status outbid">未竞得</span>
+                      {:else}
+                        <span class="bid-status outbid">{record.status === 'expired' ? '已流拍' : '已取消'}</span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
       {/if}
     </div>
@@ -411,6 +539,13 @@
             <p>当前价: <strong>{selectedAuction.currentPrice}💰</strong></p>
             <p>最低出价: <strong>{getMinBid(selectedAuction)}💰</strong></p>
             <p>可用余额: <strong>{availableGold}💰</strong></p>
+            {#if bidAmount}
+              <p class="deposit-hint">
+                保证金(10%): <strong>{getBidDeposit(parseInt(bidAmount) || 0)}💰</strong>
+                <br/>
+                <span class="deposit-total">总计需支付: {parseInt(bidAmount) + getBidDeposit(parseInt(bidAmount) || 0)}💰</span>
+              </p>
+            {/if}
           </div>
           <div class="bid-input">
             <input type="number" min={getMinBid(selectedAuction)} bind:value={bidAmount} />
@@ -418,7 +553,7 @@
           </div>
           <div class="confirm-actions">
             <button class="btn btn-primary" on:click={confirmBid}
-              disabled={!bidAmount || parseInt(bidAmount) < getMinBid(selectedAuction) || parseInt(bidAmount) > availableGold}>
+              disabled={!bidAmount || parseInt(bidAmount) < getMinBid(selectedAuction) || (parseInt(bidAmount) + getBidDeposit(parseInt(bidAmount) || 0)) > availableGold}>
               确认出价
             </button>
             <button class="btn btn-secondary" on:click={() => showBidConfirm = false}>取消</button>
@@ -785,5 +920,141 @@
 
   .confirm-actions .btn {
     flex: 1;
+  }
+
+  .deposit-info {
+    font-weight: bold;
+    color: #f59e0b;
+  }
+
+  .rep-info {
+    font-weight: bold;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+  }
+
+  .fee-tier {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 10px;
+    vertical-align: middle;
+  }
+
+  .fee-tier.tier-honest {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+  }
+
+  .fee-tier.tier-normal {
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+    color: white;
+  }
+
+  .fee-tier.tier-shady {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: white;
+  }
+
+  .fee-tier.tier-forbid {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: white;
+  }
+
+  .forbid-card {
+    border: 1px solid var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+  }
+
+  .forbid-card h3 {
+    color: var(--danger);
+  }
+
+  .forbid-hint {
+    font-size: 14px;
+    color: var(--light);
+  }
+
+  .sub-tab-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 15px;
+  }
+
+  .sub-tab-btn {
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--gray);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .sub-tab-btn.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+  }
+
+  .sub-tab-btn:hover:not(.active) {
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--light);
+  }
+
+  .seller-reputation {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.2);
+    margin-left: 8px;
+  }
+
+  .history-card {
+    opacity: 0.9;
+    border-left-color: var(--gray) !important;
+  }
+
+  .rep-change-row {
+    font-size: 13px;
+    margin-top: 4px;
+    color: var(--gray);
+  }
+
+  .rep-change {
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.2);
+    margin-left: 4px;
+  }
+
+  .price-buyer {
+    font-size: 13px;
+    color: var(--primary);
+    font-weight: 500;
+  }
+
+  .deposit-hint {
+    font-size: 13px;
+    color: var(--secondary);
+    padding: 8px;
+    background: rgba(245, 158, 11, 0.1);
+    border-radius: 6px;
+    margin-top: 8px;
+  }
+
+  .deposit-total {
+    display: inline-block;
+    margin-top: 4px;
+    color: var(--danger);
+    font-weight: 700;
   }
 </style>

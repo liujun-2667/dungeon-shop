@@ -1,6 +1,6 @@
 <script>
   import { get } from 'svelte/store';
-  import { playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass } from '../stores/gameStore.js';
+  import { playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass, getAuctionReputationColor, getAuctionReputationTier } from '../stores/gameStore.js';
 
   const qualityNames = {
     common: '普通',
@@ -27,6 +27,12 @@
     if (reputation < 0) return '👎';
     return '😐';
   }
+
+  function getAuctionReputationTooltip(auctionReputation) {
+    const tier = getAuctionReputationTier(auctionReputation);
+    const feeRate = auctionReputation >= 80 ? '3%' : auctionReputation >= 60 ? '5%' : auctionReputation >= 40 ? '8%' : '禁止挂单';
+    return `拍卖行信誉: ${auctionReputation}\n等级: ${tier}\n挂单费率: ${feeRate}`;
+  }
 </script>
 
 <div class="player-bar">
@@ -49,9 +55,17 @@
             {#if player.frozenGold > 0}
               <span class="frozen">❄️ {player.frozenGold}</span>
             {/if}
+            {#if player.frozenDeposit > 0}
+              <span class="frozen-deposit">🔒 {player.frozenDeposit}</span>
+            {/if}
             <span class="assets">📊 {player.assets}</span>
             <span class="reputation" title="{getReputationTooltip(player.reputation)}">
               {getReputationIcon(player.reputation)} {player.reputation}
+            </span>
+            <span class="auction-reputation" 
+                  style="color: {getAuctionReputationColor(player.auctionReputation)}"
+                  title="{getAuctionReputationTooltip(player.auctionReputation)}">
+              🏛️ {player.auctionReputation}
             </span>
           </div>
           <div class="player-shelves">
@@ -242,5 +256,20 @@
   .shop-badge.badge-shady {
     background: linear-gradient(135deg, #ef4444, #dc2626);
     color: white;
+  }
+
+  .frozen-deposit {
+    color: #f59e0b;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .auction-reputation {
+    font-weight: 600;
+    cursor: help;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(16, 185, 129, 0.1);
+    font-size: 13px;
   }
 </style>

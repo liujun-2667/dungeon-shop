@@ -102,6 +102,7 @@ type AuctionBid struct {
 	BidderID   string `json:"bidderId"`
 	BidderName string `json:"bidderName"`
 	Amount     int    `json:"amount"`
+	Deposit    int    `json:"deposit"`
 	Timestamp  int64  `json:"timestamp"`
 }
 
@@ -124,25 +125,27 @@ type Auction struct {
 }
 
 type PlayerState struct {
-	ID         string      `json:"id"`
-	Name       string      `json:"name"`
-	ShopName   string      `json:"shopName"`
-	Gold       int         `json:"gold"`
-	FrozenGold int         `json:"frozenGold"`
-	IsBankrupt bool        `json:"isBankrupt"`
-	Shelves    []ShelfSlot `json:"shelves"`
-	MaxShelves int         `json:"maxShelves"`
-	Warehouse  []Item      `json:"warehouse"`
-	WarehouseCapacity int  `json:"warehouseCapacity"`
-	Adventurers []Adventurer `json:"adventurers"`
-	MaxAdventurers int     `json:"maxAdventurers"`
-	Recipes    []Recipe    `json:"recipes"`
-	BranchShops []BranchShop `json:"branchShops"`
-	AttractionBonus float64 `json:"attractionBonus"`
-	UpgradeInvestment int `json:"upgradeInvestment"`
-	WeeklyStats  WeeklyStats `json:"weeklyStats"`
-	AssetHistory []int       `json:"assetHistory"`
-	Reputation  int         `json:"reputation"`
+	ID                string      `json:"id"`
+	Name              string      `json:"name"`
+	ShopName          string      `json:"shopName"`
+	Gold              int         `json:"gold"`
+	FrozenGold        int         `json:"frozenGold"`
+	FrozenDeposit     int         `json:"frozenDeposit"`
+	IsBankrupt        bool        `json:"isBankrupt"`
+	Shelves           []ShelfSlot `json:"shelves"`
+	MaxShelves        int         `json:"maxShelves"`
+	Warehouse         []Item      `json:"warehouse"`
+	WarehouseCapacity int         `json:"warehouseCapacity"`
+	Adventurers       []Adventurer `json:"adventurers"`
+	MaxAdventurers    int         `json:"maxAdventurers"`
+	Recipes           []Recipe    `json:"recipes"`
+	BranchShops       []BranchShop `json:"branchShops"`
+	AttractionBonus   float64     `json:"attractionBonus"`
+	UpgradeInvestment int         `json:"upgradeInvestment"`
+	WeeklyStats       WeeklyStats `json:"weeklyStats"`
+	AssetHistory      []int       `json:"assetHistory"`
+	Reputation        int         `json:"reputation"`
+	AuctionReputation int         `json:"auctionReputation"`
 }
 
 type BranchShop struct {
@@ -348,6 +351,82 @@ func NewID() string {
 	return uuid.New().String()
 }
 
+const (
+	AuctionReputationInitial      = 100
+	AuctionReputationHonestMin    = 80
+	AuctionReputationNormalMin    = 60
+	AuctionReputationForbidMin    = 40
+
+	AuctionReputationSellBonus    = 2
+	AuctionReputationBuyBonus     = 1
+	AuctionReputationExpirePenalty = -3
+	AuctionReputationCancelPenalty = -1
+
+	AuctionListingFeeHonest   = 0.03
+	AuctionListingFeeNormal   = 0.05
+	AuctionListingFeeShady    = 0.08
+
+	AuctionDepositRate = 0.10
+)
+
+type AuctionListingFeeTier string
+
+const (
+	ListingFeeHonest AuctionListingFeeTier = "honest"
+	ListingFeeNormal AuctionListingFeeTier = "normal"
+	ListingFeeShady  AuctionListingFeeTier = "shady"
+	ListingFeeForbid AuctionListingFeeTier = "forbid"
+)
+
+func GetAuctionListingFeeTier(auctionReputation int) AuctionListingFeeTier {
+	if auctionReputation >= AuctionReputationHonestMin {
+		return ListingFeeHonest
+	} else if auctionReputation >= AuctionReputationNormalMin {
+		return ListingFeeNormal
+	} else if auctionReputation >= AuctionReputationForbidMin {
+		return ListingFeeShady
+	}
+	return ListingFeeForbid
+}
+
+func GetAuctionListingFeeRate(auctionReputation int) float64 {
+	tier := GetAuctionListingFeeTier(auctionReputation)
+	switch tier {
+	case ListingFeeHonest:
+		return AuctionListingFeeHonest
+	case ListingFeeNormal:
+		return AuctionListingFeeNormal
+	case ListingFeeShady:
+		return AuctionListingFeeShady
+	default:
+		return AuctionListingFeeShady
+	}
+}
+
+func CanListAuction(auctionReputation int) bool {
+	return auctionReputation >= AuctionReputationForbidMin
+}
+
+func GetAuctionReputationColor(auctionReputation int) string {
+	if auctionReputation >= AuctionReputationHonestMin {
+		return "#10b981"
+	} else if auctionReputation >= AuctionReputationNormalMin {
+		return "#ffffff"
+	}
+	return "#ef4444"
+}
+
+func GetAuctionReputationTierLabel(auctionReputation int) string {
+	if auctionReputation >= AuctionReputationHonestMin {
+		return "信誉极佳"
+	} else if auctionReputation >= AuctionReputationNormalMin {
+		return "信誉良好"
+	} else if auctionReputation >= AuctionReputationForbidMin {
+		return "信誉较差"
+	}
+	return "信誉极差"
+}
+
 func NewPlayerState(name, shopName string) *PlayerState {
 	shelves := make([]ShelfSlot, 6)
 	for i := range shelves {
@@ -363,6 +442,7 @@ func NewPlayerState(name, shopName string) *PlayerState {
 		ShopName:          shopName,
 		Gold:              500,
 		FrozenGold:        0,
+		FrozenDeposit:     0,
 		IsBankrupt:        false,
 		Shelves:           shelves,
 		MaxShelves:        6,
@@ -377,6 +457,7 @@ func NewPlayerState(name, shopName string) *PlayerState {
 		WeeklyStats:       WeeklyStats{},
 		AssetHistory:      []int{500},
 		Reputation:        0,
+		AuctionReputation: AuctionReputationInitial,
 	}
 }
 

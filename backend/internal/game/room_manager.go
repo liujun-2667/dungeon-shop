@@ -1082,6 +1082,10 @@ func (rm *RoomManager) CreateAuction(roomID, playerID, itemID string, startingPr
 		return nil, "玩家无效或已破产"
 	}
 
+	if !models.CanListAuction(player.AuctionReputation) {
+		return nil, "拍卖行信誉分不足40分，禁止挂单"
+	}
+
 	activeCount := 0
 	for _, a := range room.Auctions {
 		if a.SellerID == playerID && a.Status == models.AuctionActive {
@@ -1100,7 +1104,8 @@ func (rm *RoomManager) CreateAuction(roomID, playerID, itemID string, startingPr
 		return nil, "一口价必须大于起拍价"
 	}
 
-	listingFee := int(float64(startingPrice) * AuctionListingFeeRate)
+	feeRate := models.GetAuctionListingFeeRate(player.AuctionReputation)
+	listingFee := int(float64(startingPrice) * feeRate)
 	if listingFee < 1 {
 		listingFee = 1
 	}
@@ -1204,22 +1209,36 @@ func (rm *RoomManager) PlaceBid(roomID, playerID, auctionID string, bidAmount in
 		return rm.executeBuyoutLocked(room, playerID, auctionIdx)
 	}
 
-	if player.Gold < bidAmount {
-		return nil, "可用金币不足"
+	deposit := int(float64(bidAmount) * models.AuctionDepositRate)
+	totalCost := bidAmount + deposit
+	if player.Gold < totalCost {
+		return nil, "可用金币不足，还需额外支付10%保证金"
 	}
 
-	player.Gold -= bidAmount
+	player.Gold -= totalCost
 	player.FrozenGold += bidAmount
+	player.FrozenDeposit += deposit
 
 	if auction.HighestBidderID != "" {
 		prevBidder := room.Players[auction.HighestBidderID]
 		if prevBidder != nil {
 			refundAmount := auction.CurrentPrice
+			prevDeposit := 0
+			for _, bid := range auction.BidHistory {
+				if bid.BidderID == auction.HighestBidderID && bid.Amount == auction.CurrentPrice {
+					prevDeposit = bid.Deposit
+					break
+				}
+			}
 			prevBidder.FrozenGold -= refundAmount
+			prevBidder.FrozenDeposit -= prevDeposit
 			if prevBidder.FrozenGold < 0 {
 				prevBidder.FrozenGold = 0
 			}
-			prevBidder.Gold += refundAmount
+			if prevBidder.FrozenDeposit < 0 {
+				prevBidder.FrozenDeposit = 0
+			}
+			prevBidder.Gold += refundAmount + prevDeposit
 		}
 	}
 
@@ -1230,6 +1249,7 @@ func (rm *RoomManager) PlaceBid(roomID, playerID, auctionID string, bidAmount in
 		BidderID:   playerID,
 		BidderName: player.Name,
 		Amount:     bidAmount,
+		Deposit:    deposit,
 		Timestamp:  time.Now().Unix(),
 	})
 
@@ -1296,11 +1316,22 @@ func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, a
 		prevBidder := room.Players[auction.HighestBidderID]
 		if prevBidder != nil {
 			refundAmount := auction.CurrentPrice
+			prevDeposit := 0
+			for _, bid := range auction.BidHistory {
+				if bid.BidderID == auction.HighestBidderID && bid.Amount == auction.CurrentPrice {
+					prevDeposit = bid.Deposit
+					break
+				}
+			}
 			prevBidder.FrozenGold -= refundAmount
+			prevBidder.FrozenDeposit -= prevDeposit
 			if prevBidder.FrozenGold < 0 {
 				prevBidder.FrozenGold = 0
 			}
-			prevBidder.Gold += refundAmount
+			if prevBidder.FrozenDeposit < 0 {
+				prevBidder.FrozenDeposit = 0
+			}
+			prevBidder.Gold += refundAmount + prevDeposit
 		}
 	}
 
@@ -1311,10 +1342,14 @@ func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, a
 	if seller != nil {
 		seller.Gold += sellerEarnings
 		seller.WeeklyStats.Income += sellerEarnings
+		seller.AuctionReputation += models.AuctionReputationSellBonus
 	}
 
-	if player != nil && len(player.Warehouse) < player.WarehouseCapacity {
-		player.Warehouse = append(player.Warehouse, auction.Item)
+	if player != nil {
+		player.AuctionReputation += models.AuctionReputationBuyBonus
+		if len(player.Warehouse) < player.WarehouseCapacity {
+			player.Warehouse = append(player.Warehouse, auction.Item)
+		}
 	}
 
 	auction.CurrentPrice = auction.BuyoutPrice
@@ -1325,6 +1360,7 @@ func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, a
 		BidderID:   playerID,
 		BidderName: player.Name,
 		Amount:     auction.BuyoutPrice,
+		Deposit:    0,
 		Timestamp:  time.Now().Unix(),
 	})
 
@@ -1409,6 +1445,8 @@ func (rm *RoomManager) SettleAuctions(roomID string) []models.Auction {
 }
 
 func (rm *RoomManager) findNextValidBidder(room *models.Room, auction *models.Auction) {
+	seller := room.Players[auction.SellerID]
+
 	for i := len(auction.BidHistory) - 1; i >= 0; i-- {
 		bid := auction.BidHistory[i]
 		bidder := room.Players[bid.BidderID]
@@ -1416,37 +1454,67 @@ func (rm *RoomManager) findNextValidBidder(room *models.Room, auction *models.Au
 			if auction.HighestBidderID != "" && auction.HighestBidderID != bid.BidderID {
 				prevBidder := room.Players[auction.HighestBidderID]
 				if prevBidder != nil {
-					refundAmount := auction.CurrentPrice
-					prevBidder.FrozenGold -= refundAmount
+					prevDeposit := 0
+					for _, pb := range auction.BidHistory {
+						if pb.BidderID == auction.HighestBidderID && pb.Amount == auction.CurrentPrice {
+							prevDeposit = pb.Deposit
+							break
+						}
+					}
+					prevBidder.FrozenGold -= auction.CurrentPrice
+					prevBidder.FrozenDeposit -= prevDeposit
 					if prevBidder.FrozenGold < 0 {
 						prevBidder.FrozenGold = 0
 					}
-					prevBidder.Gold += refundAmount
+					if prevBidder.FrozenDeposit < 0 {
+						prevBidder.FrozenDeposit = 0
+					}
+					if seller != nil && prevBidder.IsBankrupt {
+						seller.Gold += prevDeposit
+						seller.WeeklyStats.Income += prevDeposit
+					} else {
+						prevBidder.Gold += auction.CurrentPrice + prevDeposit
+					}
 				}
 			}
 
 			auction.HighestBidderID = bid.BidderID
 			auction.HighestBidderName = bid.BidderName
 			auction.CurrentPrice = bid.Amount
-
-			player := room.Players[bid.BidderID]
-			if player != nil {
-				player.FrozenGold += bid.Amount
-				player.Gold -= bid.Amount
-			}
 			return
+		} else if bidder != nil && bidder.IsBankrupt && seller != nil {
+			seller.Gold += bid.Deposit
+			seller.WeeklyStats.Income += bid.Deposit
+			bidder.FrozenDeposit -= bid.Deposit
+			if bidder.FrozenDeposit < 0 {
+				bidder.FrozenDeposit = 0
+			}
+			bidder.FrozenGold -= bid.Amount
+			if bidder.FrozenGold < 0 {
+				bidder.FrozenGold = 0
+			}
 		}
 	}
 
 	if auction.HighestBidderID != "" {
 		prevBidder := room.Players[auction.HighestBidderID]
 		if prevBidder != nil {
-			refundAmount := auction.CurrentPrice
-			prevBidder.FrozenGold -= refundAmount
+			prevDeposit := 0
+			for _, pb := range auction.BidHistory {
+				if pb.BidderID == auction.HighestBidderID && pb.Amount == auction.CurrentPrice {
+					prevDeposit = pb.Deposit
+					break
+				}
+			}
+			prevBidder.FrozenGold -= auction.CurrentPrice
+			prevBidder.FrozenDeposit -= prevDeposit
 			if prevBidder.FrozenGold < 0 {
 				prevBidder.FrozenGold = 0
 			}
-			prevBidder.Gold += refundAmount
+			if prevBidder.FrozenDeposit < 0 {
+				prevBidder.FrozenDeposit = 0
+			}
+			prevBidder.Gold += auction.CurrentPrice + prevDeposit
 		}
 	}
 
@@ -1456,15 +1524,18 @@ func (rm *RoomManager) findNextValidBidder(room *models.Room, auction *models.Au
 }
 
 func (rm *RoomManager) refundAllBidders(room *models.Room, auction *models.Auction) {
-	if auction.HighestBidderID != "" {
-		bidder := room.Players[auction.HighestBidderID]
+	for _, bid := range auction.BidHistory {
+		bidder := room.Players[bid.BidderID]
 		if bidder != nil {
-			bidder.FrozenGold -= auction.CurrentPrice
+			bidder.FrozenGold -= bid.Amount
+			bidder.FrozenDeposit -= bid.Deposit
 			if bidder.FrozenGold < 0 {
-				extraRefund := -bidder.FrozenGold
 				bidder.FrozenGold = 0
-				bidder.Gold += extraRefund
 			}
+			if bidder.FrozenDeposit < 0 {
+				bidder.FrozenDeposit = 0
+			}
+			bidder.Gold += bid.Amount + bid.Deposit
 		}
 	}
 }
@@ -1504,8 +1575,11 @@ func (rm *RoomManager) CancelAuction(roomID, playerID, auctionID string) (*model
 	}
 
 	player := room.Players[playerID]
-	if player != nil && len(player.Warehouse) < player.WarehouseCapacity {
-		player.Warehouse = append(player.Warehouse, auction.Item)
+	if player != nil {
+		player.AuctionReputation += models.AuctionReputationCancelPenalty
+		if len(player.Warehouse) < player.WarehouseCapacity {
+			player.Warehouse = append(player.Warehouse, auction.Item)
+		}
 	}
 
 	auction.Status = models.AuctionCancelled
@@ -1523,50 +1597,117 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 			continue
 		}
 
+		seller := room.Players[auction.SellerID]
+
 		if auction.HighestBidderID != "" {
 			winnerID := auction.HighestBidderID
 			winner := room.Players[winnerID]
 
-			if winner != nil && winner.IsBankrupt {
-				rm.findNextValidBidder(room, auction)
-				winnerID = auction.HighestBidderID
-				winner = room.Players[winnerID]
+			winnerDeposit := 0
+			for _, bid := range auction.BidHistory {
+				if bid.BidderID == winnerID && bid.Amount == auction.CurrentPrice {
+					winnerDeposit = bid.Deposit
+					break
+				}
 			}
 
-			if winnerID != "" && winner != nil && !winner.IsBankrupt {
+			if winner != nil && !winner.IsBankrupt {
 				winner.FrozenGold -= auction.CurrentPrice
+				winner.FrozenDeposit -= winnerDeposit
 				if winner.FrozenGold < 0 {
 					winner.FrozenGold = 0
 				}
+				if winner.FrozenDeposit < 0 {
+					winner.FrozenDeposit = 0
+				}
+				winner.Gold += winnerDeposit
+
+				winner.AuctionReputation += models.AuctionReputationBuyBonus
 
 				if len(winner.Warehouse) < winner.WarehouseCapacity {
 					winner.Warehouse = append(winner.Warehouse, auction.Item)
 				}
 
-				seller := room.Players[auction.SellerID]
 				commission := int(float64(auction.CurrentPrice) * AuctionCommissionRate)
 				sellerEarnings := auction.CurrentPrice - commission
 
 				if seller != nil {
 					seller.Gold += sellerEarnings
 					seller.WeeklyStats.Income += sellerEarnings
+					seller.AuctionReputation += models.AuctionReputationSellBonus
 				}
 
 				auction.Status = models.AuctionSold
+			} else if winner != nil && winner.IsBankrupt {
+				rm.findNextValidBidder(room, auction)
+				winnerID = auction.HighestBidderID
+				winner = room.Players[winnerID]
+
+				if winnerID != "" && winner != nil && !winner.IsBankrupt {
+					newWinnerDeposit := 0
+					for _, bid := range auction.BidHistory {
+						if bid.BidderID == winnerID && bid.Amount == auction.CurrentPrice {
+							newWinnerDeposit = bid.Deposit
+							break
+						}
+					}
+
+					winner.FrozenGold -= auction.CurrentPrice
+					winner.FrozenDeposit -= newWinnerDeposit
+					if winner.FrozenGold < 0 {
+						winner.FrozenGold = 0
+					}
+					if winner.FrozenDeposit < 0 {
+						winner.FrozenDeposit = 0
+					}
+					winner.Gold += newWinnerDeposit
+
+					winner.AuctionReputation += models.AuctionReputationBuyBonus
+
+					if len(winner.Warehouse) < winner.WarehouseCapacity {
+						winner.Warehouse = append(winner.Warehouse, auction.Item)
+					}
+
+					commission := int(float64(auction.CurrentPrice) * AuctionCommissionRate)
+					sellerEarnings := auction.CurrentPrice - commission
+
+					if seller != nil {
+						seller.Gold += sellerEarnings
+						seller.WeeklyStats.Income += sellerEarnings
+						seller.AuctionReputation += models.AuctionReputationSellBonus
+					}
+
+					auction.Status = models.AuctionSold
+				} else {
+					rm.refundAllBidders(room, auction)
+
+					if seller != nil {
+						seller.AuctionReputation += models.AuctionReputationExpirePenalty
+						if len(seller.Warehouse) < seller.WarehouseCapacity {
+							seller.Warehouse = append(seller.Warehouse, auction.Item)
+						}
+					}
+
+					auction.Status = models.AuctionExpired
+				}
 			} else {
 				rm.refundAllBidders(room, auction)
 
-				seller := room.Players[auction.SellerID]
-				if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
-					seller.Warehouse = append(seller.Warehouse, auction.Item)
+				if seller != nil {
+					seller.AuctionReputation += models.AuctionReputationExpirePenalty
+					if len(seller.Warehouse) < seller.WarehouseCapacity {
+						seller.Warehouse = append(seller.Warehouse, auction.Item)
+					}
 				}
 
 				auction.Status = models.AuctionExpired
 			}
 		} else {
-			seller := room.Players[auction.SellerID]
-			if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
-				seller.Warehouse = append(seller.Warehouse, auction.Item)
+			if seller != nil {
+				seller.AuctionReputation += models.AuctionReputationExpirePenalty
+				if len(seller.Warehouse) < seller.WarehouseCapacity {
+					seller.Warehouse = append(seller.Warehouse, auction.Item)
+				}
 			}
 
 			auction.Status = models.AuctionExpired

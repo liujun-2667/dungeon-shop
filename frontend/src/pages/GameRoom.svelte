@@ -168,7 +168,8 @@
         break;
       case 'bid_update':
         if (msg.data) {
-          addLog(`🏷️ 拍卖出价更新: ${msg.data.itemTypeName || '商品'} 当前价 ${msg.data.currentPrice}💰 (${msg.data.highestBidder})`, 'info');
+          const depositText = msg.data.deposit ? `，保证金 ${msg.data.deposit}💰` : '';
+          addLog(`🏷️ 拍卖出价更新: ${msg.data.itemTypeName || '商品'} 当前价 ${msg.data.currentPrice}💰${depositText} (${msg.data.highestBidder})`, 'info');
         }
         break;
       case 'auction_end':
@@ -194,6 +195,24 @@
         if (msg.data) {
           addLog(`⚠️ 拍卖操作失败: ${msg.data.error}`, 'error');
           addAuctionError(msg.data.action, msg.data.error);
+        }
+        break;
+      case 'reputation_update':
+        if (msg.data && Array.isArray(msg.data)) {
+          room.update(currentRoom => {
+            if (!currentRoom || !currentRoom.players) return currentRoom;
+            const updatedRoom = { ...currentRoom };
+            for (const rep of msg.data) {
+              if (updatedRoom.players[rep.playerId]) {
+                updatedRoom.players[rep.playerId] = {
+                  ...updatedRoom.players[rep.playerId],
+                  auctionReputation: rep.auctionReputation,
+                  reputation: rep.shopReputation,
+                };
+              }
+            }
+            return updatedRoom;
+          });
         }
         break;
     }
