@@ -122,6 +122,45 @@ type Auction struct {
 	EndWeek        int           `json:"endWeek"`
 	Status         AuctionStatus `json:"status"`
 	CreatedAt      int64         `json:"createdAt"`
+	IsGuildAuction bool          `json:"isGuildAuction,omitempty"`
+	GuildID        string        `json:"guildId,omitempty"`
+}
+
+type GuildMember struct {
+	PlayerID     string    `json:"playerId"`
+	PlayerName   string    `json:"playerName"`
+	JoinTime     int64     `json:"joinTime"`
+	IsLeader     bool      `json:"isLeader"`
+	Contribution int       `json:"contribution"`
+}
+
+type Guild struct {
+	ID          string            `json:"id"`
+	RoomID      string            `json:"roomId"`
+	Name        string            `json:"name"`
+	Abbreviation string           `json:"abbreviation"`
+	Level       int               `json:"level"`
+	Treasury    int               `json:"treasury"`
+	LeaderID    string            `json:"leaderId"`
+	Members     []GuildMember     `json:"members"`
+	Warehouse   []Item            `json:"warehouse"`
+	CreatedAt   int64             `json:"createdAt"`
+	BannedPlayers map[string]int64 `json:"bannedPlayers,omitempty"`
+}
+
+const (
+	GuildMaxLevel          = 5
+	GuildCreateCost        = 50
+	GuildContributionRate  = 0.02
+	GuildWarehousePerLevel = 5
+	GuildKickBanDuration   = 2
+)
+
+var GuildUpgradeRequirements = map[int]int{
+	2: 200,
+	3: 500,
+	4: 1000,
+	5: 2000,
 }
 
 type PlayerState struct {
@@ -146,6 +185,7 @@ type PlayerState struct {
 	AssetHistory      []int       `json:"assetHistory"`
 	Reputation        int         `json:"reputation"`
 	AuctionReputation int         `json:"auctionReputation"`
+	GuildID           string      `json:"guildId,omitempty"`
 }
 
 type BranchShop struct {
@@ -225,6 +265,7 @@ type Room struct {
 	SynthesisTasks []SynthesisTask       `json:"synthesisTasks"`
 	ExplorationMissions []ExplorationMission `json:"explorationMissions"`
 	Auctions      []Auction             `json:"auctions"`
+	Guilds        map[string]*Guild     `json:"guilds"`
 	Status       string                 `json:"status"`
 	CreatedAt    time.Time              `json:"createdAt"`
 
@@ -477,6 +518,7 @@ func NewRoom(name string, maxPlayers int, seed int64) *Room {
 		SynthesisTasks:      make([]SynthesisTask, 0),
 		ExplorationMissions: make([]ExplorationMission, 0),
 		Auctions:            make([]Auction, 0),
+		Guilds:              make(map[string]*Guild),
 		Status:              "waiting",
 		CreatedAt:           time.Now(),
 	}

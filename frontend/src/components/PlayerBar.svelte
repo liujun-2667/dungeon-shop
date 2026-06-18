@@ -1,6 +1,6 @@
 <script>
   import { get } from 'svelte/store';
-  import { playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass, getAuctionReputationColor, getAuctionReputationTier } from '../stores/gameStore.js';
+  import { room, playerRanking, itemTypes, getReputationLevel, getReputationLabel, getReputationDescription, getReputationClass, getAuctionReputationColor, getAuctionReputationTier, getPlayerGuildTag } from '../stores/gameStore.js';
 
   const qualityNames = {
     common: '普通',
@@ -45,6 +45,11 @@
         <div class="player-info">
           <div class="player-header">
             <span class="player-name">{player.name}</span>
+            {#if player.guildId}
+              <span class="guild-tag" title="{$room?.guilds?.[player.guildId]?.name || ''}">
+                [{getPlayerGuildTag($room, player.id)}]
+              </span>
+            {/if}
             <span class="shop-name">{player.shopName}</span>
             {#if repLevel !== 'normal'}
               <span class="shop-badge badge-{repLevel}">{repLabel}</span>
@@ -90,6 +95,11 @@
         <div class="player-info">
           <div class="player-header">
             <span class="player-name">{player.name}</span>
+            {#if player.guildId}
+              <span class="guild-tag" title="{$room?.guilds?.[player.guildId]?.name || ''}">
+                [{getPlayerGuildTag($room, player.id)}]
+              </span>
+            {/if}
             <span class="shop-name">{player.shopName}</span>
           </div>
           <div class="player-stats">
@@ -271,5 +281,16 @@
     border-radius: 4px;
     background: rgba(16, 185, 129, 0.1);
     font-size: 13px;
+  }
+
+  .guild-tag {
+    background: linear-gradient(135deg, var(--primary), #6d28d9);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    margin-right: 8px;
+    cursor: help;
   }
 </style>

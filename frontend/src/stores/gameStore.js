@@ -24,6 +24,8 @@ export const gameResults = writable(null);
 export const isConnected = writable(false);
 export const bargainRequests = writable([]);
 export const auctionErrors = writable([]);
+export const guilds = writable([]);
+export const guildErrors = writable([]);
 
 export const currentPlayer = derived([room, currentUser], ([$room, $user]) => {
   if (!$room || !$user.playerId) return null;
@@ -296,4 +298,55 @@ export function getMyBidHistory(room, playerId) {
         createdAt: a.createdAt,
       };
     });
+}
+
+export const GUILD_MAX_LEVEL = 5;
+export const GUILD_WAREHOUSE_PER_LEVEL = 5;
+export const GUILD_UPGRADE_REQUIREMENTS = {
+  2: 200,
+  3: 500,
+  4: 1000,
+  5: 2000,
+};
+
+export function getCurrentGuild(guildsList, playerGuildId) {
+  if (!guildsList || !playerGuildId) return null;
+  return guildsList.find(g => g.id === playerGuildId) || null;
+}
+
+export function getGuildWarehouseCapacity(guildLevel) {
+  return (guildLevel || 1) * GUILD_WAREHOUSE_PER_LEVEL;
+}
+
+export function getGuildUpgradeCost(currentLevel) {
+  return GUILD_UPGRADE_REQUIREMENTS[currentLevel + 1] || 0;
+}
+
+export function getGuildMaxMembers(roomMaxPlayers) {
+  return Math.ceil(roomMaxPlayers / 2);
+}
+
+export function getActiveGuildAuctions(room, guildId) {
+  if (!room || !room.auctions || !guildId) return [];
+  return room.auctions.filter(a => a.isGuildAuction && a.guildId === guildId && a.status === 'active');
+}
+
+export function addGuildError(action, error) {
+  guildErrors.update(list => [...list, { id: Date.now(), action, error }]);
+  setTimeout(() => {
+    guildErrors.update(list => list.slice(1));
+  }, 3000);
+}
+
+export function getPlayerGuildTag(room, playerId) {
+  if (!room || !room.players || !playerId) return null;
+  const player = room.players[playerId];
+  if (!player || !player.guildId || !room.guilds) return null;
+  const guild = room.guilds[player.guildId];
+  return guild ? guild.abbreviation : null;
+}
+
+export function isGuildLeader(guild, playerId) {
+  if (!guild || !playerId) return false;
+  return guild.leaderId === playerId;
 }

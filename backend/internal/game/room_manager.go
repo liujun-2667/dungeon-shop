@@ -1157,6 +1157,102 @@ func (rm *RoomManager) CreateAuction(roomID, playerID, itemID string, startingPr
 	return &auction, ""
 }
 
+func (rm *RoomManager) CreateGuildAuction(roomID, playerID, itemID string, startingPrice, buyoutPrice int) (*models.Auction, string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok || room.Phase != models.PhasePurchase {
+		return nil, "只能在进货日挂单"
+	}
+
+	player := room.Players[playerID]
+	if player == nil || player.IsBankrupt {
+		return nil, "玩家无效或已破产"
+	}
+
+	if player.GuildID == "" {
+		return nil, "你没有加入任何公会"
+	}
+
+	guild, ok := room.Guilds[player.GuildID]
+	if !ok {
+		return nil, "公会不存在"
+	}
+
+	activeCount := 0
+	for _, a := range room.Auctions {
+		if a.SellerID == playerID && a.Status == models.AuctionActive {
+			activeCount++
+		}
+	}
+	if activeCount >= MaxActiveAuctionsPerPlayer {
+		return nil, "同时最多挂5件商品"
+	}
+
+	if startingPrice <= 0 {
+		return nil, "起拍价必须大于0"
+	}
+
+	if buyoutPrice > 0 && buyoutPrice <= startingPrice {
+		return nil, "一口价必须大于起拍价"
+	}
+
+	itemIdx := -1
+	for i, item := range player.Warehouse {
+		if item.ID == itemID {
+			itemIdx = i
+			break
+		}
+	}
+	if itemIdx == -1 {
+		return nil, "仓库中未找到该商品"
+	}
+
+	item := player.Warehouse[itemIdx]
+	player.Warehouse = append(player.Warehouse[:itemIdx], player.Warehouse[itemIdx+1:]...)
+
+	itemType, _ := models.GetItemType(item.TypeID)
+	itemTypeName := ""
+	if itemType.ID != "" {
+		itemTypeName = itemType.Name
+	}
+
+	auction := models.Auction{
+		ID:              models.NewID(),
+		SellerID:        playerID,
+		SellerShopName:  player.ShopName,
+		Item:            item,
+		ItemTypeName:    itemTypeName,
+		StartingPrice:   startingPrice,
+		BuyoutPrice:     buyoutPrice,
+		CurrentPrice:    startingPrice,
+		HighestBidderID: "",
+		HighestBidderName: "",
+		BidHistory:      make([]models.AuctionBid, 0),
+		StartWeek:       room.CurrentWeek,
+		EndWeek:         room.CurrentWeek + AuctionDurationWeeks,
+		Status:          models.AuctionActive,
+		CreatedAt:       time.Now().Unix(),
+		IsGuildAuction:  true,
+		GuildID:         guild.ID,
+	}
+
+	room.Auctions = append(room.Auctions, auction)
+	return &auction, ""
+}
+
+func isPlayerInGuild(room *models.Room, playerID, guildID string) bool {
+	if guildID == "" {
+		return true
+	}
+	player, ok := room.Players[playerID]
+	if !ok {
+		return false
+	}
+	return player.GuildID == guildID
+}
+
 func (rm *RoomManager) PlaceBid(roomID, playerID, auctionID string, bidAmount int) (*models.Auction, string) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -1194,6 +1290,10 @@ func (rm *RoomManager) PlaceBid(roomID, playerID, auctionID string, bidAmount in
 
 	if auction.SellerID == playerID {
 		return nil, "不能对自己挂出的商品出价"
+	}
+
+	if auction.IsGuildAuction && !isPlayerInGuild(room, playerID, auction.GuildID) {
+		return nil, "这是公会内部拍卖，只有同公会成员可以出价"
 	}
 
 	minBid := auction.CurrentPrice + int(float64(auction.CurrentPrice)*AuctionMinBidIncrement)
@@ -1295,6 +1395,10 @@ func (rm *RoomManager) Buyout(roomID, playerID, auctionID string) (*models.Aucti
 		return nil, "不能购买自己挂出的商品"
 	}
 
+	if auction.IsGuildAuction && !isPlayerInGuild(room, playerID, auction.GuildID) {
+		return nil, "这是公会内部拍卖，只有同公会成员可以购买"
+	}
+
 	if auction.BuyoutPrice <= 0 {
 		return nil, "该拍卖无一口价"
 	}
@@ -1340,8 +1444,22 @@ func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, a
 	sellerEarnings := auction.BuyoutPrice - commission
 
 	if seller != nil {
-		seller.Gold += sellerEarnings
-		seller.WeeklyStats.Income += sellerEarnings
+		guildContribution := 0
+		if seller.GuildID != "" && room.Guilds != nil {
+			if guild, ok := room.Guilds[seller.GuildID]; ok {
+				guildContribution = int(float64(auction.BuyoutPrice) * models.GuildContributionRate)
+				guild.Treasury += guildContribution
+				for i := range guild.Members {
+					if guild.Members[i].PlayerID == auction.SellerID {
+						guild.Members[i].Contribution += guildContribution
+						break
+					}
+				}
+			}
+		}
+
+		seller.Gold += sellerEarnings - guildContribution
+		seller.WeeklyStats.Income += sellerEarnings - guildContribution
 		seller.AuctionReputation += models.AuctionReputationSellBonus
 	}
 
@@ -1632,8 +1750,22 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 				sellerEarnings := auction.CurrentPrice - commission
 
 				if seller != nil {
-					seller.Gold += sellerEarnings
-					seller.WeeklyStats.Income += sellerEarnings
+					guildContribution := 0
+					if seller.GuildID != "" && room.Guilds != nil {
+						if guild, ok := room.Guilds[seller.GuildID]; ok {
+							guildContribution = int(float64(auction.CurrentPrice) * models.GuildContributionRate)
+							guild.Treasury += guildContribution
+							for i := range guild.Members {
+								if guild.Members[i].PlayerID == auction.SellerID {
+									guild.Members[i].Contribution += guildContribution
+									break
+								}
+							}
+						}
+					}
+
+					seller.Gold += sellerEarnings - guildContribution
+					seller.WeeklyStats.Income += sellerEarnings - guildContribution
 					seller.AuctionReputation += models.AuctionReputationSellBonus
 				}
 
@@ -1672,8 +1804,22 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 					sellerEarnings := auction.CurrentPrice - commission
 
 					if seller != nil {
-						seller.Gold += sellerEarnings
-						seller.WeeklyStats.Income += sellerEarnings
+						guildContribution := 0
+						if seller.GuildID != "" && room.Guilds != nil {
+							if guild, ok := room.Guilds[seller.GuildID]; ok {
+								guildContribution = int(float64(auction.CurrentPrice) * models.GuildContributionRate)
+								guild.Treasury += guildContribution
+								for i := range guild.Members {
+									if guild.Members[i].PlayerID == auction.SellerID {
+										guild.Members[i].Contribution += guildContribution
+										break
+									}
+								}
+							}
+						}
+
+						seller.Gold += sellerEarnings - guildContribution
+						seller.WeeklyStats.Income += sellerEarnings - guildContribution
 						seller.AuctionReputation += models.AuctionReputationSellBonus
 					}
 
@@ -1694,7 +1840,9 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 				rm.refundAllBidders(room, auction)
 
 				if seller != nil {
-					seller.AuctionReputation += models.AuctionReputationExpirePenalty
+					if !auction.IsGuildAuction {
+						seller.AuctionReputation += models.AuctionReputationExpirePenalty
+					}
 					if len(seller.Warehouse) < seller.WarehouseCapacity {
 						seller.Warehouse = append(seller.Warehouse, auction.Item)
 					}
@@ -1704,7 +1852,9 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 			}
 		} else {
 			if seller != nil {
-				seller.AuctionReputation += models.AuctionReputationExpirePenalty
+				if !auction.IsGuildAuction {
+					seller.AuctionReputation += models.AuctionReputationExpirePenalty
+				}
 				if len(seller.Warehouse) < seller.WarehouseCapacity {
 					seller.Warehouse = append(seller.Warehouse, auction.Item)
 				}

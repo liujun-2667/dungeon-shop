@@ -6,8 +6,10 @@
     currentPlayer,
     currentPhase,
     itemTypes,
+    guilds,
     addLog,
     getActiveAuctions,
+    getActiveGuildAuctions,
     getMyAuctions,
     getMyBids,
     getMinBid,
@@ -20,6 +22,7 @@
     getPlayerAuctionReputation,
     getMyAuctionHistory,
     getMyBidHistory,
+    getCurrentGuild,
   } from '../stores/gameStore.js';
   import { sendWS } from '../utils/api.js';
 
@@ -40,6 +43,7 @@
   let createItemId = '';
   let createStartingPrice = '';
   let createBuyoutPrice = '';
+  let createIsGuildAuction = false;
 
   const qualityNames = {
     common: '普通',
@@ -65,7 +69,10 @@
 
   $: playerId = $currentUser.playerId;
   $: currentWeek = $room?.currentWeek || 0;
+  $: playerGuildId = $currentPlayer?.guildId || '';
+  $: currentGuild = getCurrentGuild($guilds, playerGuildId);
   $: activeAuctions = getActiveAuctions($room);
+  $: activeGuildAuctions = getActiveGuildAuctions($room, playerGuildId);
   $: myAuctions = getMyAuctions($room, playerId);
   $: myBids = getMyBids($room, playerId);
   $: myAuctionHistory = getMyAuctionHistory($room, playerId);
@@ -153,17 +160,22 @@
       return;
     }
 
-    const listingFee = Math.max(1, Math.floor(startingPrice * listingFeeRate));
-    if (listingFee > availableGold) {
-      alert(`挂单费 ${listingFee}💰 不足`);
-      return;
+    if (!createIsGuildAuction) {
+      const listingFee = Math.max(1, Math.floor(startingPrice * listingFeeRate));
+      if (listingFee > availableGold) {
+        alert(`挂单费 ${listingFee}💰 不足`);
+        return;
+      }
+      sendWS(ws, 'create_auction', { itemId, startingPrice, buyoutPrice });
+    } else {
+      sendWS(ws, 'create_guild_auction', { itemId, startingPrice, buyoutPrice });
     }
 
-    sendWS(ws, 'create_auction', { itemId, startingPrice, buyoutPrice });
     showCreateForm = false;
     createItemId = '';
     createStartingPrice = '';
     createBuyoutPrice = '';
+    createIsGuildAuction = false;
   }
 
   function getBidDeposit(amount) {
@@ -200,13 +212,18 @@
       <button class="tab-btn" class:active={activeTab === 'browse'} on:click={() => activeTab = 'browse'}>
         浏览竞拍
       </button>
+      {#if currentGuild}
+        <button class="tab-btn" class:active={activeTab === 'guild-auctions'} on:click={() => activeTab = 'guild-auctions'}>
+          🏰 公会拍卖
+        </button>
+      {/if}
       <button class="tab-btn" class:active={activeTab === 'my-auctions'} on:click={() => activeTab = 'my-auctions'}>
         我的拍卖
       </button>
       <button class="tab-btn" class:active={activeTab === 'my-bids'} on:click={() => activeTab = 'my-bids'}>
         我的竞拍
       </button>
-      {#if canListAuctionFlag}
+      {#if canListAuctionFlag || currentGuild}
         <button class="tab-btn btn-list" on:click={() => showCreateForm = !showCreateForm}>
           {showCreateForm ? '取消挂单' : '📦 挂单出售'}
         </button>
@@ -219,13 +236,20 @@
         <p class="forbid-hint">拍卖行信誉分不足40分（当前 {playerAuctionReputation}），禁止挂单拍卖，仍可参与竞拍。</p>
       </div>
     {/if}
-    {#if showCreateForm && canListAuctionFlag}
+    {#if showCreateForm && (canListAuctionFlag || currentGuild)}
       <div class="create-form card">
         <h3>挂单出售
-          <span class="fee-tier tier-{listingFeeTier}">
-            费率 {(listingFeeRate * 100).toFixed(0)}%
-            ({listingFeeTier === 'honest' ? '优惠' : listingFeeTier === 'shady' ? '惩罚' : '标准'})
-          </span>
+          {#if !createIsGuildAuction}
+            <span class="fee-tier tier-{listingFeeTier}">
+              费率 {(listingFeeRate * 100).toFixed(0)}%
+              ({listingFeeTier === 'honest' ? '优惠' : listingFeeTier === 'shady' ? '惩罚' : '标准'})
+            </span>
+          {/if}
+          {#if createIsGuildAuction}
+            <span class="fee-tier tier-honest">
+              🏰 公会内部拍卖（免挂单费，不计信誉）
+            </span>
+          {/if}
         </h3>
         <div class="form-row">
           <label>选择商品:</label>
@@ -241,14 +265,25 @@
         <div class="form-row">
           <label>起拍价:</label>
           <input type="number" min="1" bind:value={createStartingPrice} placeholder="最低起拍价" />
-          {#if createStartingPrice}
+          {#if createStartingPrice && !createIsGuildAuction}
             <span class="fee-hint">挂单费: {Math.max(1, Math.floor(parseInt(createStartingPrice) * listingFeeRate))}💰</span>
+          {/if}
+          {#if createStartingPrice && createIsGuildAuction}
+            <span class="fee-hint free">挂单费: 免费</span>
           {/if}
         </div>
         <div class="form-row">
           <label>一口价 (可选):</label>
           <input type="number" min="0" bind:value={createBuyoutPrice} placeholder="留空为纯竞拍" />
         </div>
+        {#if currentGuild}
+          <div class="form-row">
+            <label>
+              <input type="checkbox" bind:checked={createIsGuildAuction} />
+              设为公会内部拍卖（仅公会成员可见，免挂单费）
+            </label>
+          </div>
+        {/if}
         <button class="btn btn-primary" on:click={submitCreateAuction} disabled={!createItemId || !createStartingPrice}>
           确认挂单
         </button>
@@ -335,6 +370,99 @@
                     {/if}
                   {:else}
                     <span class="own-label">自己的商品</span>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+      {:else if activeTab === 'guild-auctions'}
+        <div class="guild-auction-header">
+          <h4>🏰 公会内部拍卖 - [{currentGuild.abbreviation}] {currentGuild.name}</h4>
+          <p class="hint">仅公会成员可见，免挂单费，流拍不扣信誉</p>
+        </div>
+        <div class="filter-bar">
+          <select bind:value={filterCategory}>
+            <option value="">全部类别</option>
+            <option value="weapon">武器</option>
+            <option value="armor">防具</option>
+            <option value="consumable">消耗品</option>
+            <option value="material">材料</option>
+          </select>
+          <select bind:value={filterQuality}>
+            <option value="">全部品质</option>
+            <option value="common">普通</option>
+            <option value="fine">精良</option>
+            <option value="rare">稀有</option>
+            <option value="legendary">传说</option>
+          </select>
+          <select bind:value={sortBy}>
+            {#each sortOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+
+        {#if activeGuildAuctions.length === 0}
+          <p class="empty">暂无公会内部拍卖</p>
+        {:else}
+          <div class="auction-list">
+            {#each activeGuildAuctions as auction}
+              <div class="auction-card quality-{auction.item.quality} guild-auction-card">
+                <div class="guild-badge">🏰 公会拍卖</div>
+                <div class="auction-main">
+                  <div class="auction-item-info">
+                    <span class="item-name quality-{auction.item.quality}">
+                      {getItemInfo(auction.item.typeId).name}
+                    </span>
+                    <span class="item-quality quality-{auction.item.quality}">
+                      {qualityNames[auction.item.quality]}
+                    </span>
+                    <span class="item-category">
+                      {categoryNames[getItemInfo(auction.item.typeId).category] || ''}
+                    </span>
+                  </div>
+                  <div class="auction-seller">
+                    卖家: {auction.sellerShopName}
+                    <span class="seller-reputation" 
+                          style="color: {getAuctionReputationColor(getPlayerAuctionReputation($room, auction.sellerId))}">
+                      🏛️ {getPlayerAuctionReputation($room, auction.sellerId)}
+                    </span>
+                  </div>
+                  <div class="auction-prices">
+                    <span class="price-label">起拍: {auction.startingPrice}💰</span>
+                    <span class="price-current">
+                      当前: {auction.currentPrice}💰
+                      {#if auction.highestBidderName}
+                        <span class="bidder">({auction.highestBidderName})</span>
+                      {/if}
+                    </span>
+                    {#if auction.buyoutPrice > 0}
+                      <span class="price-buyout">一口价: {auction.buyoutPrice}💰</span>
+                    {/if}
+                    <span class="price-remaining">剩余 {getRemainingWeeks(auction, currentWeek)} 周</span>
+                  </div>
+                </div>
+                <div class="auction-actions">
+                  {#if auction.sellerId !== playerId}
+                    {#if canBid}
+                      <button class="btn btn-primary small" on:click={() => openBidConfirm(auction)}>
+                        出价
+                      </button>
+                      {#if auction.buyoutPrice > 0}
+                        <button class="btn btn-secondary small" on:click={() => executeBuyout(auction)}
+                          disabled={availableGold < auction.buyoutPrice}>
+                          一口价
+                        </button>
+                      {/if}
+                    {:else}
+                      <span class="hint-small">竞拍在营业/探索日开放</span>
+                    {/if}
+                  {:else}
+                    <button class="btn btn-danger small" on:click={() => cancelAuction(auction)}>
+                      取消拍卖
+                    </button>
                   {/if}
                 </div>
               </div>
@@ -1056,5 +1184,47 @@
     margin-top: 4px;
     color: var(--danger);
     font-weight: 700;
+  }
+
+  .guild-auction-header {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.1));
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 15px;
+  }
+
+  .guild-auction-header h4 {
+    margin: 0 0 5px;
+    color: var(--success);
+  }
+
+  .guild-auction-header .hint {
+    margin: 0;
+    color: var(--gray);
+    font-size: 13px;
+  }
+
+  .guild-auction-card {
+    border-color: rgba(16, 185, 129, 0.3);
+    background: rgba(16, 185, 129, 0.05);
+    position: relative;
+  }
+
+  .guild-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .fee-hint.free {
+    color: var(--success);
+    font-weight: 600;
   }
 </style>

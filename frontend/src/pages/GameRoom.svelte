@@ -15,11 +15,13 @@
     eventLog,
     gameResults,
     isConnected,
+    guilds,
     addLog,
     addBargainRequest,
     removeBargainRequest,
     clearBargainRequests,
     addAuctionError,
+    addGuildError,
   } from '../stores/gameStore.js';
   import { api, connectWebSocket, sendWS } from '../utils/api.js';
 
@@ -33,6 +35,7 @@
   import SynthesisModal from '../components/SynthesisModal.svelte';
   import BargainBubble from '../components/BargainBubble.svelte';
   import AuctionHouse from '../components/AuctionHouse.svelte';
+  import GuildPanel from '../components/GuildPanel.svelte';
 
   export let params;
   let ws = null;
@@ -43,6 +46,7 @@
   let showUpgrade = false;
   let showSynthesis = false;
   let showAuctionHouse = false;
+  let showGuild = false;
   let draggedItem = null;
 
   const phaseNames = {
@@ -215,6 +219,47 @@
           });
         }
         break;
+      case 'guild_update':
+        if (msg.data && msg.data.guilds) {
+          guilds.set(msg.data.guilds);
+        }
+        break;
+      case 'guild_created':
+        if (msg.data) {
+          addLog(`🏰 新公会成立: ${msg.data.name}`, 'success');
+        }
+        break;
+      case 'guild_joined':
+        if (msg.data) {
+          addLog(`🎉 ${msg.data.playerName} 加入了公会 ${msg.data.guildName}`, 'success');
+        }
+        break;
+      case 'guild_left':
+        if (msg.data) {
+          addLog(`👋 ${msg.data.playerName} 离开了公会 ${msg.data.guildName}`, 'info');
+        }
+        break;
+      case 'guild_kicked':
+        if (msg.data) {
+          addLog(`🚫 ${msg.data.targetName} 被踢出了公会 ${msg.data.guildName}`, 'warning');
+        }
+        break;
+      case 'guild_upgraded':
+        if (msg.data) {
+          addLog(`⬆️ 公会 ${msg.data.name} 升级到 Lv.${msg.data.level}！`, 'success');
+        }
+        break;
+      case 'guild_warehouse_updated':
+        if (msg.data) {
+          addLog(`📦 公会仓库${msg.data.action}了 ${msg.data.itemName}`, 'info');
+        }
+        break;
+      case 'guild_error':
+        if (msg.data) {
+          addLog(`⚠️ 公会操作失败: ${msg.data.error}`, 'error');
+          addGuildError(msg.data.action, msg.data.error);
+        }
+        break;
     }
   }
 
@@ -358,6 +403,7 @@
       bind:showUpgrade
       bind:showSynthesis
       bind:showAuctionHouse
+      bind:showGuild
     />
 
     <EventLog />
@@ -393,6 +439,10 @@
 
   {#if showAuctionHouse}
     <AuctionHouse {ws} on:close={() => showAuctionHouse = false} />
+  {/if}
+
+  {#if showGuild}
+    <GuildPanel {ws} on:close={() => showGuild = false} />
   {/if}
 
   <BargainBubble {ws} />

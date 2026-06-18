@@ -6,6 +6,7 @@
   export let showUpgrade;
   export let showSynthesis;
   export let showAuctionHouse;
+  export let showGuild;
 
   const phaseDescriptions = {
     purchase: '从批发商采购商品，摆上货架并定价',
@@ -48,6 +49,9 @@
     {#if canAuction}
       <button class="btn btn-auction" on:click={() => showAuctionHouse = true}>
         🏛️ 拍卖行
+      </button>
+      <button class="btn btn-guild" on:click={() => showGuild = true}>
+        🏰 公会
       </button>
     {/if}
   </div>
@@ -106,5 +110,17 @@
   .btn-auction:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
+  }
+
+  .btn-guild {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+    border: 1px solid rgba(16, 185, 129, 0.5);
+  }
+
+  .btn-guild:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.6);
   }
 </style>

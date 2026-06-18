@@ -169,7 +169,7 @@ func (h *Hub) phaseTimer() {
 
 				for _, a := range room.Auctions {
 					if prevAuctions[a.ID] == "active" && a.Status != "active" {
-						h.BroadcastToRoom(room.ID, models.WSMessage{
+						auctionEndMsg := models.WSMessage{
 							Type:   "auction_end",
 							RoomID: room.ID,
 							Data: map[string]interface{}{
@@ -179,7 +179,12 @@ func (h *Hub) phaseTimer() {
 								"highestBidder": a.HighestBidderName,
 								"itemTypeName":  a.ItemTypeName,
 							},
-						})
+						}
+						if a.IsGuildAuction {
+							h.SendToGuild(room.ID, a.GuildID, auctionEndMsg)
+						} else {
+							h.BroadcastToRoom(room.ID, auctionEndMsg)
+						}
 					}
 				}
 
@@ -272,6 +277,59 @@ func (h *Hub) SendToPlayer(roomID, playerID string, message models.WSMessage) {
 			}
 		}
 	}
+}
+
+func (h *Hub) SendToGuild(roomID, guildID string, message models.WSMessage) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	room, ok := h.roomManager.GetRoom(roomID)
+	if !ok {
+		return
+	}
+
+	guild, ok := room.Guilds[guildID]
+	if !ok {
+		return
+	}
+
+	guildMemberIDs := make(map[string]bool)
+	for _, member := range guild.Members {
+		guildMemberIDs[member.PlayerID] = true
+	}
+
+	if clients, ok := h.clients[roomID]; ok {
+		for client := range clients {
+			if guildMemberIDs[client.PlayerID] {
+				select {
+				case client.Send <- message:
+				default:
+					close(client.Send)
+					delete(clients, client)
+				}
+			}
+		}
+	}
+}
+
+func (h *Hub) broadcastGuildUpdate(roomID string) {
+	room, ok := h.roomManager.GetRoom(roomID)
+	if !ok {
+		return
+	}
+
+	guildsList := make([]*models.Guild, 0, len(room.Guilds))
+	for _, guild := range room.Guilds {
+		guildsList = append(guildsList, guild)
+	}
+
+	h.BroadcastToRoom(roomID, models.WSMessage{
+		Type:   "guild_update",
+		RoomID: roomID,
+		Data: map[string]interface{}{
+			"guilds": guildsList,
+		},
+	})
 }
 
 func (c *Client) ReadPump(hub *Hub) {
@@ -556,7 +614,7 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 			})
 
 			if auction.Status == models.AuctionSold {
-				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				buyoutMsg := models.WSMessage{
 					Type:   "buyout",
 					RoomID: msg.RoomID,
 					Data: map[string]interface{}{
@@ -565,10 +623,15 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 						"highestBidder": auction.HighestBidderName,
 						"itemTypeName":  auction.ItemTypeName,
 					},
-				})
+				}
+				if auction.IsGuildAuction {
+					h.SendToGuild(msg.RoomID, auction.GuildID, buyoutMsg)
+				} else {
+					h.BroadcastToRoom(msg.RoomID, buyoutMsg)
+				}
 				h.broadcastReputationUpdates(msg.RoomID, room)
 			} else {
-				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				bidMsg := models.WSMessage{
 					Type:   "bid_update",
 					RoomID: msg.RoomID,
 					Data: map[string]interface{}{
@@ -580,7 +643,12 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 						"deposit":        deposit,
 						"bidderId":       msg.PlayerID,
 					},
-				})
+				}
+				if auction.IsGuildAuction {
+					h.SendToGuild(msg.RoomID, auction.GuildID, bidMsg)
+				} else {
+					h.BroadcastToRoom(msg.RoomID, bidMsg)
+				}
 			}
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
@@ -605,7 +673,7 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 				Data:   room,
 			})
 
-			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+			buyoutMsg := models.WSMessage{
 				Type:   "buyout",
 				RoomID: msg.RoomID,
 				Data: map[string]interface{}{
@@ -614,7 +682,12 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 					"highestBidder": auction.HighestBidderName,
 					"itemTypeName":  auction.ItemTypeName,
 				},
-			})
+			}
+			if auction.IsGuildAuction {
+				h.SendToGuild(msg.RoomID, auction.GuildID, buyoutMsg)
+			} else {
+				h.BroadcastToRoom(msg.RoomID, buyoutMsg)
+			}
 			h.broadcastReputationUpdates(msg.RoomID, room)
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
@@ -639,17 +712,204 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 				Data:   room,
 			})
 
-			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
-				Type:   "auction_cancelled",
-				RoomID: msg.RoomID,
-				Data:   auction.ID,
-			})
+			if auction.IsGuildAuction {
+				h.SendToGuild(msg.RoomID, auction.GuildID, models.WSMessage{
+					Type:   "auction_cancelled",
+					RoomID: msg.RoomID,
+					Data:   auction.ID,
+				})
+			} else {
+				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+					Type:   "auction_cancelled",
+					RoomID: msg.RoomID,
+					Data:   auction.ID,
+				})
+			}
 			h.broadcastReputationUpdates(msg.RoomID, room)
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
 				Type:   "auction_error",
 				RoomID: msg.RoomID,
 				Data:   map[string]interface{}{"action": "cancel", "error": errMsg},
+			})
+		}
+
+	case "create_guild":
+		var data struct {
+			GuildName string `json:"guildName"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		guild, errMsg := h.roomManager.CreateGuild(msg.RoomID, msg.PlayerID, data.GuildName)
+		if guild != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "create_guild", "error": errMsg},
+			})
+		}
+
+	case "join_guild":
+		var data struct {
+			GuildID string `json:"guildId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		guild, errMsg := h.roomManager.JoinGuild(msg.RoomID, msg.PlayerID, data.GuildID)
+		if guild != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "join_guild", "error": errMsg},
+			})
+		}
+
+	case "leave_guild":
+		errMsg := h.roomManager.LeaveGuild(msg.RoomID, msg.PlayerID)
+		if errMsg == "" {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "leave_guild", "error": errMsg},
+			})
+		}
+
+	case "kick_guild_member":
+		var data struct {
+			TargetPlayerID string `json:"targetPlayerId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		errMsg := h.roomManager.KickMember(msg.RoomID, msg.PlayerID, data.TargetPlayerID)
+		if errMsg == "" {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "kick_member", "error": errMsg},
+			})
+		}
+
+	case "upgrade_guild":
+		guild, errMsg := h.roomManager.UpgradeGuild(msg.RoomID, msg.PlayerID)
+		if guild != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "upgrade_guild", "error": errMsg},
+			})
+		}
+
+	case "deposit_guild_warehouse":
+		var data struct {
+			ItemID string `json:"itemId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		errMsg := h.roomManager.DepositGuildWarehouse(msg.RoomID, msg.PlayerID, data.ItemID)
+		if errMsg == "" {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "deposit_warehouse", "error": errMsg},
+			})
+		}
+
+	case "withdraw_guild_warehouse":
+		var data struct {
+			ItemID string `json:"itemId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		errMsg := h.roomManager.WithdrawGuildWarehouse(msg.RoomID, msg.PlayerID, data.ItemID)
+		if errMsg == "" {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "withdraw_warehouse", "error": errMsg},
+			})
+		}
+
+	case "create_guild_auction":
+		var data struct {
+			ItemID        string `json:"itemId"`
+			StartingPrice int    `json:"startingPrice"`
+			BuyoutPrice   int    `json:"buyoutPrice"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		auction, errMsg := h.roomManager.CreateGuildAuction(msg.RoomID, msg.PlayerID, data.ItemID, data.StartingPrice, data.BuyoutPrice)
+		if auction != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.SendToGuild(msg.RoomID, auction.GuildID, models.WSMessage{
+				Type:   "guild_auction_created",
+				RoomID: msg.RoomID,
+				Data:   auction,
+			})
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "auction_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "create_guild_auction", "error": errMsg},
 			})
 		}
 	}
