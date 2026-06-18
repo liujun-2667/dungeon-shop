@@ -46,6 +46,9 @@
           </div>
           <div class="player-stats">
             <span class="gold">💰 {player.gold}</span>
+            {#if player.frozenGold > 0}
+              <span class="frozen">❄️ {player.frozenGold}</span>
+            {/if}
             <span class="assets">📊 {player.assets}</span>
             <span class="reputation" title="{getReputationTooltip(player.reputation)}">
               {getReputationIcon(player.reputation)} {player.reputation}
@@ -77,6 +80,9 @@
           </div>
           <div class="player-stats">
             <span class="gold">💰 {player.gold}</span>
+            {#if player.frozenGold > 0}
+              <span class="frozen">❄️ {player.frozenGold}</span>
+            {/if}
             <span class="assets">📊 {player.assets}</span>
           </div>
           <div class="player-shelves">
@@ -154,6 +160,12 @@
   .gold {
     color: var(--secondary);
     font-weight: 600;
+  }
+
+  .frozen {
+    color: #60a5fa;
+    font-weight: 600;
+    font-size: 13px;
   }
 
   .assets {

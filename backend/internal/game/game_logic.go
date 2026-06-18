@@ -366,11 +366,11 @@ func CalculateTotalAssets(player *models.PlayerState) int {
 
 	upgradeValue := int(float64(player.UpgradeInvestment) * 0.5)
 
-	return player.Gold + inventoryValue + upgradeValue
+	return player.Gold + player.FrozenGold + inventoryValue + upgradeValue
 }
 
 func CheckBankruptcy(player *models.PlayerState) bool {
-	if player.Gold <= 0 && len(player.Warehouse) == 0 {
+	if player.Gold <= 0 && player.FrozenGold <= 0 && len(player.Warehouse) == 0 {
 		hasItems := false
 		for _, slot := range player.Shelves {
 			if slot.Item != nil {

@@ -19,6 +19,7 @@
     addBargainRequest,
     removeBargainRequest,
     clearBargainRequests,
+    addAuctionError,
   } from '../stores/gameStore.js';
   import { api, connectWebSocket, sendWS } from '../utils/api.js';
 
@@ -31,6 +32,7 @@
   import UpgradeModal from '../components/UpgradeModal.svelte';
   import SynthesisModal from '../components/SynthesisModal.svelte';
   import BargainBubble from '../components/BargainBubble.svelte';
+  import AuctionHouse from '../components/AuctionHouse.svelte';
 
   export let params;
   let ws = null;
@@ -40,6 +42,7 @@
   let showHire = false;
   let showUpgrade = false;
   let showSynthesis = false;
+  let showAuctionHouse = false;
   let draggedItem = null;
 
   const phaseNames = {
@@ -161,6 +164,36 @@
       case 'bargain_resolved':
         if (msg.data && msg.data.bargainId) {
           removeBargainRequest(msg.data.bargainId);
+        }
+        break;
+      case 'bid_update':
+        if (msg.data) {
+          addLog(`🏷️ 拍卖出价更新: ${msg.data.itemTypeName || '商品'} 当前价 ${msg.data.currentPrice}💰 (${msg.data.highestBidder})`, 'info');
+        }
+        break;
+      case 'auction_end':
+        if (msg.data) {
+          const statusText = msg.data.status === 'sold' ? '已成交' : '已流拍';
+          addLog(`🏛️ 拍卖结束: ${msg.data.itemTypeName || '商品'} ${statusText}，成交价 ${msg.data.currentPrice}💰`, msg.data.status === 'sold' ? 'success' : 'warning');
+        }
+        break;
+      case 'buyout':
+        if (msg.data) {
+          addLog(`🏛️ 一口价成交: ${msg.data.itemTypeName || '商品'} 以 ${msg.data.currentPrice}💰 被买走`, 'success');
+        }
+        break;
+      case 'auction_created':
+        if (msg.data) {
+          addLog(`📦 新拍卖上架: ${msg.data.itemTypeName || '商品'}`, 'info');
+        }
+        break;
+      case 'auction_cancelled':
+        addLog('拍卖已取消', 'info');
+        break;
+      case 'auction_error':
+        if (msg.data) {
+          addLog(`⚠️ 拍卖操作失败: ${msg.data.error}`, 'error');
+          addAuctionError(msg.data.action, msg.data.error);
         }
         break;
     }
@@ -305,6 +338,7 @@
       {showHire}
       {showUpgrade}
       {showSynthesis}
+      {showAuctionHouse}
     />
 
     <EventLog />
@@ -336,6 +370,10 @@
       on:close={() => showSynthesis = false}
       {startSynthesis}
     />
+  {/if}
+
+  {#if showAuctionHouse}
+    <AuctionHouse {ws} on:close={() => showAuctionHouse = false} />
   {/if}
 
   <BargainBubble {ws} />

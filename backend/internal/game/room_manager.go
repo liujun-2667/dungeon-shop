@@ -132,6 +132,8 @@ func (rm *RoomManager) ProcessPhaseEnd(roomID string) bool {
 			return true
 		}
 
+		rm.settleAuctionsLocked(room)
+
 		for _, player := range room.Players {
 			expiredCount := ProcessExpiredItems(player, room.CurrentWeek)
 			if expiredCount > 0 {
@@ -1056,4 +1058,518 @@ func (rm *RoomManager) RemoveItemFromShelf(roomID, playerID, shelfID string) boo
 	}
 
 	return false
+}
+
+const (
+	AuctionListingFeeRate   = 0.05
+	AuctionCommissionRate   = 0.08
+	AuctionMinBidIncrement  = 0.10
+	AuctionDurationWeeks    = 2
+	MaxActiveAuctionsPerPlayer = 5
+)
+
+func (rm *RoomManager) CreateAuction(roomID, playerID, itemID string, startingPrice, buyoutPrice int) (*models.Auction, string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok || room.Phase != models.PhasePurchase {
+		return nil, "只能在进货日挂单"
+	}
+
+	player := room.Players[playerID]
+	if player == nil || player.IsBankrupt {
+		return nil, "玩家无效或已破产"
+	}
+
+	activeCount := 0
+	for _, a := range room.Auctions {
+		if a.SellerID == playerID && a.Status == models.AuctionActive {
+			activeCount++
+		}
+	}
+	if activeCount >= MaxActiveAuctionsPerPlayer {
+		return nil, "同时最多挂5件商品"
+	}
+
+	if startingPrice <= 0 {
+		return nil, "起拍价必须大于0"
+	}
+
+	if buyoutPrice > 0 && buyoutPrice <= startingPrice {
+		return nil, "一口价必须大于起拍价"
+	}
+
+	listingFee := int(float64(startingPrice) * AuctionListingFeeRate)
+	if listingFee < 1 {
+		listingFee = 1
+	}
+	if player.Gold < listingFee {
+		return nil, "金币不足支付挂单费"
+	}
+
+	itemIdx := -1
+	for i, item := range player.Warehouse {
+		if item.ID == itemID {
+			itemIdx = i
+			break
+		}
+	}
+	if itemIdx == -1 {
+		return nil, "仓库中未找到该商品"
+	}
+
+	item := player.Warehouse[itemIdx]
+	player.Warehouse = append(player.Warehouse[:itemIdx], player.Warehouse[itemIdx+1:]...)
+
+	player.Gold -= listingFee
+
+	itemType, _ := models.GetItemType(item.TypeID)
+	itemTypeName := ""
+	if itemType.ID != "" {
+		itemTypeName = itemType.Name
+	}
+
+	auction := models.Auction{
+		ID:              models.NewID(),
+		SellerID:        playerID,
+		SellerShopName:  player.ShopName,
+		Item:            item,
+		ItemTypeName:    itemTypeName,
+		StartingPrice:   startingPrice,
+		BuyoutPrice:     buyoutPrice,
+		CurrentPrice:    startingPrice,
+		HighestBidderID: "",
+		HighestBidderName: "",
+		BidHistory:      make([]models.AuctionBid, 0),
+		StartWeek:       room.CurrentWeek,
+		EndWeek:         room.CurrentWeek + AuctionDurationWeeks,
+		Status:          models.AuctionActive,
+		CreatedAt:       time.Now().Unix(),
+	}
+
+	room.Auctions = append(room.Auctions, auction)
+	return &auction, ""
+}
+
+func (rm *RoomManager) PlaceBid(roomID, playerID, auctionID string, bidAmount int) (*models.Auction, string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil, "房间不存在"
+	}
+
+	if room.Phase != models.PhaseBusiness && room.Phase != models.PhaseExplore {
+		return nil, "只能在营业日或探索日出价"
+	}
+
+	player := room.Players[playerID]
+	if player == nil || player.IsBankrupt {
+		return nil, "玩家无效或已破产"
+	}
+
+	auctionIdx := -1
+	for i, a := range room.Auctions {
+		if a.ID == auctionID {
+			auctionIdx = i
+			break
+		}
+	}
+	if auctionIdx == -1 {
+		return nil, "拍卖不存在"
+	}
+
+	auction := &room.Auctions[auctionIdx]
+
+	if auction.Status != models.AuctionActive {
+		return nil, "拍卖已结束"
+	}
+
+	if auction.SellerID == playerID {
+		return nil, "不能对自己挂出的商品出价"
+	}
+
+	minBid := auction.CurrentPrice + int(float64(auction.CurrentPrice)*AuctionMinBidIncrement)
+	if auction.CurrentPrice == auction.StartingPrice && len(auction.BidHistory) == 0 {
+		minBid = auction.CurrentPrice
+	}
+
+	if bidAmount < minBid {
+		return nil, "出价必须高于当前最高价的10%"
+	}
+
+	if auction.BuyoutPrice > 0 && bidAmount >= auction.BuyoutPrice {
+		return rm.executeBuyoutLocked(room, playerID, auctionIdx)
+	}
+
+	if player.Gold < bidAmount {
+		return nil, "可用金币不足"
+	}
+
+	player.Gold -= bidAmount
+	player.FrozenGold += bidAmount
+
+	if auction.HighestBidderID != "" {
+		prevBidder := room.Players[auction.HighestBidderID]
+		if prevBidder != nil {
+			refundAmount := auction.CurrentPrice
+			prevBidder.FrozenGold -= refundAmount
+			if prevBidder.FrozenGold < 0 {
+				prevBidder.FrozenGold = 0
+			}
+			prevBidder.Gold += refundAmount
+		}
+	}
+
+	auction.CurrentPrice = bidAmount
+	auction.HighestBidderID = playerID
+	auction.HighestBidderName = player.Name
+	auction.BidHistory = append(auction.BidHistory, models.AuctionBid{
+		BidderID:   playerID,
+		BidderName: player.Name,
+		Amount:     bidAmount,
+		Timestamp:  time.Now().Unix(),
+	})
+
+	return auction, ""
+}
+
+func (rm *RoomManager) Buyout(roomID, playerID, auctionID string) (*models.Auction, string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil, "房间不存在"
+	}
+
+	if room.Phase != models.PhaseBusiness && room.Phase != models.PhaseExplore {
+		return nil, "只能在营业日或探索日购买"
+	}
+
+	player := room.Players[playerID]
+	if player == nil || player.IsBankrupt {
+		return nil, "玩家无效或已破产"
+	}
+
+	auctionIdx := -1
+	for i, a := range room.Auctions {
+		if a.ID == auctionID {
+			auctionIdx = i
+			break
+		}
+	}
+	if auctionIdx == -1 {
+		return nil, "拍卖不存在"
+	}
+
+	auction := &room.Auctions[auctionIdx]
+
+	if auction.Status != models.AuctionActive {
+		return nil, "拍卖已结束"
+	}
+
+	if auction.SellerID == playerID {
+		return nil, "不能购买自己挂出的商品"
+	}
+
+	if auction.BuyoutPrice <= 0 {
+		return nil, "该拍卖无一口价"
+	}
+
+	return rm.executeBuyoutLocked(room, playerID, auctionIdx)
+}
+
+func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, auctionIdx int) (*models.Auction, string) {
+	auction := &room.Auctions[auctionIdx]
+	player := room.Players[playerID]
+
+	if player.Gold < auction.BuyoutPrice {
+		return nil, "可用金币不足"
+	}
+
+	player.Gold -= auction.BuyoutPrice
+
+	if auction.HighestBidderID != "" {
+		prevBidder := room.Players[auction.HighestBidderID]
+		if prevBidder != nil {
+			refundAmount := auction.CurrentPrice
+			prevBidder.FrozenGold -= refundAmount
+			if prevBidder.FrozenGold < 0 {
+				prevBidder.FrozenGold = 0
+			}
+			prevBidder.Gold += refundAmount
+		}
+	}
+
+	seller := room.Players[auction.SellerID]
+	commission := int(float64(auction.BuyoutPrice) * AuctionCommissionRate)
+	sellerEarnings := auction.BuyoutPrice - commission
+
+	if seller != nil {
+		seller.Gold += sellerEarnings
+		seller.WeeklyStats.Income += sellerEarnings
+	}
+
+	if player != nil && len(player.Warehouse) < player.WarehouseCapacity {
+		player.Warehouse = append(player.Warehouse, auction.Item)
+	}
+
+	auction.CurrentPrice = auction.BuyoutPrice
+	auction.HighestBidderID = playerID
+	auction.HighestBidderName = player.Name
+	auction.Status = models.AuctionSold
+	auction.BidHistory = append(auction.BidHistory, models.AuctionBid{
+		BidderID:   playerID,
+		BidderName: player.Name,
+		Amount:     auction.BuyoutPrice,
+		Timestamp:  time.Now().Unix(),
+	})
+
+	return auction, ""
+}
+
+func (rm *RoomManager) SettleAuctions(roomID string) []models.Auction {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil
+	}
+
+	settled := make([]models.Auction, 0)
+
+	for i := range room.Auctions {
+		auction := &room.Auctions[i]
+		if auction.Status != models.AuctionActive {
+			continue
+		}
+
+		if room.CurrentWeek < auction.EndWeek {
+			continue
+		}
+
+		if auction.HighestBidderID != "" {
+			winnerID := auction.HighestBidderID
+			winner := room.Players[winnerID]
+
+			if winner != nil && winner.IsBankrupt {
+				rm.findNextValidBidder(room, auction)
+				winnerID = auction.HighestBidderID
+				winner = room.Players[winnerID]
+			}
+
+			if winnerID != "" && winner != nil && !winner.IsBankrupt {
+				winner.FrozenGold -= auction.CurrentPrice
+				if winner.FrozenGold < 0 {
+					winner.FrozenGold = 0
+				}
+
+				if len(winner.Warehouse) < winner.WarehouseCapacity {
+					winner.Warehouse = append(winner.Warehouse, auction.Item)
+				}
+
+				seller := room.Players[auction.SellerID]
+				commission := int(float64(auction.CurrentPrice) * AuctionCommissionRate)
+				sellerEarnings := auction.CurrentPrice - commission
+
+				if seller != nil {
+					seller.Gold += sellerEarnings
+					seller.WeeklyStats.Income += sellerEarnings
+				}
+
+				auction.Status = models.AuctionSold
+				settled = append(settled, *auction)
+			} else {
+				rm.refundAllBidders(room, auction)
+
+				seller := room.Players[auction.SellerID]
+				if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
+					seller.Warehouse = append(seller.Warehouse, auction.Item)
+				}
+
+				auction.Status = models.AuctionExpired
+				settled = append(settled, *auction)
+			}
+		} else {
+			seller := room.Players[auction.SellerID]
+			if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
+				seller.Warehouse = append(seller.Warehouse, auction.Item)
+			}
+
+			auction.Status = models.AuctionExpired
+			settled = append(settled, *auction)
+		}
+	}
+
+	return settled
+}
+
+func (rm *RoomManager) findNextValidBidder(room *models.Room, auction *models.Auction) {
+	for i := len(auction.BidHistory) - 1; i >= 0; i-- {
+		bid := auction.BidHistory[i]
+		bidder := room.Players[bid.BidderID]
+		if bidder != nil && !bidder.IsBankrupt {
+			if auction.HighestBidderID != "" && auction.HighestBidderID != bid.BidderID {
+				prevBidder := room.Players[auction.HighestBidderID]
+				if prevBidder != nil {
+					refundAmount := auction.CurrentPrice
+					prevBidder.FrozenGold -= refundAmount
+					if prevBidder.FrozenGold < 0 {
+						prevBidder.FrozenGold = 0
+					}
+					prevBidder.Gold += refundAmount
+				}
+			}
+
+			auction.HighestBidderID = bid.BidderID
+			auction.HighestBidderName = bid.BidderName
+			auction.CurrentPrice = bid.Amount
+
+			player := room.Players[bid.BidderID]
+			if player != nil {
+				player.FrozenGold += bid.Amount
+				player.Gold -= bid.Amount
+			}
+			return
+		}
+	}
+
+	if auction.HighestBidderID != "" {
+		prevBidder := room.Players[auction.HighestBidderID]
+		if prevBidder != nil {
+			refundAmount := auction.CurrentPrice
+			prevBidder.FrozenGold -= refundAmount
+			if prevBidder.FrozenGold < 0 {
+				prevBidder.FrozenGold = 0
+			}
+			prevBidder.Gold += refundAmount
+		}
+	}
+
+	auction.HighestBidderID = ""
+	auction.HighestBidderName = ""
+	auction.CurrentPrice = auction.StartingPrice
+}
+
+func (rm *RoomManager) refundAllBidders(room *models.Room, auction *models.Auction) {
+	if auction.HighestBidderID != "" {
+		bidder := room.Players[auction.HighestBidderID]
+		if bidder != nil {
+			bidder.FrozenGold -= auction.CurrentPrice
+			if bidder.FrozenGold < 0 {
+				extraRefund := -bidder.FrozenGold
+				bidder.FrozenGold = 0
+				bidder.Gold += extraRefund
+			}
+		}
+	}
+}
+
+func (rm *RoomManager) CancelAuction(roomID, playerID, auctionID string) (*models.Auction, string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil, "房间不存在"
+	}
+
+	auctionIdx := -1
+	for i, a := range room.Auctions {
+		if a.ID == auctionID {
+			auctionIdx = i
+			break
+		}
+	}
+	if auctionIdx == -1 {
+		return nil, "拍卖不存在"
+	}
+
+	auction := &room.Auctions[auctionIdx]
+
+	if auction.SellerID != playerID {
+		return nil, "只能取消自己的拍卖"
+	}
+
+	if auction.Status != models.AuctionActive {
+		return nil, "拍卖已结束，无法取消"
+	}
+
+	if len(auction.BidHistory) > 0 {
+		return nil, "已有人出价，无法取消"
+	}
+
+	player := room.Players[playerID]
+	if player != nil && len(player.Warehouse) < player.WarehouseCapacity {
+		player.Warehouse = append(player.Warehouse, auction.Item)
+	}
+
+	auction.Status = models.AuctionCancelled
+	return auction, ""
+}
+
+func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
+	for i := range room.Auctions {
+		auction := &room.Auctions[i]
+		if auction.Status != models.AuctionActive {
+			continue
+		}
+
+		if room.CurrentWeek < auction.EndWeek {
+			continue
+		}
+
+		if auction.HighestBidderID != "" {
+			winnerID := auction.HighestBidderID
+			winner := room.Players[winnerID]
+
+			if winner != nil && winner.IsBankrupt {
+				rm.findNextValidBidder(room, auction)
+				winnerID = auction.HighestBidderID
+				winner = room.Players[winnerID]
+			}
+
+			if winnerID != "" && winner != nil && !winner.IsBankrupt {
+				winner.FrozenGold -= auction.CurrentPrice
+				if winner.FrozenGold < 0 {
+					winner.FrozenGold = 0
+				}
+
+				if len(winner.Warehouse) < winner.WarehouseCapacity {
+					winner.Warehouse = append(winner.Warehouse, auction.Item)
+				}
+
+				seller := room.Players[auction.SellerID]
+				commission := int(float64(auction.CurrentPrice) * AuctionCommissionRate)
+				sellerEarnings := auction.CurrentPrice - commission
+
+				if seller != nil {
+					seller.Gold += sellerEarnings
+					seller.WeeklyStats.Income += sellerEarnings
+				}
+
+				auction.Status = models.AuctionSold
+			} else {
+				rm.refundAllBidders(room, auction)
+
+				seller := room.Players[auction.SellerID]
+				if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
+					seller.Warehouse = append(seller.Warehouse, auction.Item)
+				}
+
+				auction.Status = models.AuctionExpired
+			}
+		} else {
+			seller := room.Players[auction.SellerID]
+			if seller != nil && len(seller.Warehouse) < seller.WarehouseCapacity {
+				seller.Warehouse = append(seller.Warehouse, auction.Item)
+			}
+
+			auction.Status = models.AuctionExpired
+		}
+	}
 }

@@ -89,11 +89,46 @@ type Recipe struct {
 	OwnerID   string   `json:"ownerId"`
 }
 
+type AuctionStatus string
+
+const (
+	AuctionActive  AuctionStatus = "active"
+	AuctionSold    AuctionStatus = "sold"
+	AuctionExpired AuctionStatus = "expired"
+	AuctionCancelled AuctionStatus = "cancelled"
+)
+
+type AuctionBid struct {
+	BidderID   string `json:"bidderId"`
+	BidderName string `json:"bidderName"`
+	Amount     int    `json:"amount"`
+	Timestamp  int64  `json:"timestamp"`
+}
+
+type Auction struct {
+	ID             string        `json:"id"`
+	SellerID       string        `json:"sellerId"`
+	SellerShopName string        `json:"sellerShopName"`
+	Item           Item          `json:"item"`
+	ItemTypeName   string        `json:"itemTypeName"`
+	StartingPrice  int           `json:"startingPrice"`
+	BuyoutPrice    int           `json:"buyoutPrice,omitempty"`
+	CurrentPrice   int           `json:"currentPrice"`
+	HighestBidderID string       `json:"highestBidderId,omitempty"`
+	HighestBidderName string     `json:"highestBidderName,omitempty"`
+	BidHistory     []AuctionBid  `json:"bidHistory"`
+	StartWeek      int           `json:"startWeek"`
+	EndWeek        int           `json:"endWeek"`
+	Status         AuctionStatus `json:"status"`
+	CreatedAt      int64         `json:"createdAt"`
+}
+
 type PlayerState struct {
 	ID         string      `json:"id"`
 	Name       string      `json:"name"`
 	ShopName   string      `json:"shopName"`
 	Gold       int         `json:"gold"`
+	FrozenGold int         `json:"frozenGold"`
 	IsBankrupt bool        `json:"isBankrupt"`
 	Shelves    []ShelfSlot `json:"shelves"`
 	MaxShelves int         `json:"maxShelves"`
@@ -186,6 +221,7 @@ type Room struct {
 	CurrentEvent *GlobalEvent           `json:"currentEvent"`
 	SynthesisTasks []SynthesisTask       `json:"synthesisTasks"`
 	ExplorationMissions []ExplorationMission `json:"explorationMissions"`
+	Auctions      []Auction             `json:"auctions"`
 	Status       string                 `json:"status"`
 	CreatedAt    time.Time              `json:"createdAt"`
 
@@ -326,6 +362,7 @@ func NewPlayerState(name, shopName string) *PlayerState {
 		Name:              name,
 		ShopName:          shopName,
 		Gold:              500,
+		FrozenGold:        0,
 		IsBankrupt:        false,
 		Shelves:           shelves,
 		MaxShelves:        6,
@@ -358,6 +395,7 @@ func NewRoom(name string, maxPlayers int, seed int64) *Room {
 		NPCsThisWeek:        make([]NPC, 0),
 		SynthesisTasks:      make([]SynthesisTask, 0),
 		ExplorationMissions: make([]ExplorationMission, 0),
+		Auctions:            make([]Auction, 0),
 		Status:              "waiting",
 		CreatedAt:           time.Now(),
 	}

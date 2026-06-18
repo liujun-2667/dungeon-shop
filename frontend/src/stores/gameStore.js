@@ -23,6 +23,7 @@ export const eventLog = writable([]);
 export const gameResults = writable(null);
 export const isConnected = writable(false);
 export const bargainRequests = writable([]);
+export const auctionErrors = writable([]);
 
 export const currentPlayer = derived([room, currentUser], ([$room, $user]) => {
   if (!$room || !$user.playerId) return null;
@@ -38,6 +39,7 @@ export const playerRanking = derived([room, itemTypes], ([$room, $itemTypes]) =>
       name: p.name,
       shopName: p.shopName,
       gold: p.gold,
+      frozenGold: p.frozenGold || 0,
       assets: calculateAssets(p, $itemTypes),
       isBankrupt: p.isBankrupt,
       reputation: p.reputation ?? 0,
@@ -47,7 +49,7 @@ export const playerRanking = derived([room, itemTypes], ([$room, $itemTypes]) =>
 });
 
 function calculateAssets(player, itemTypesMap) {
-  let value = player.gold;
+  let value = player.gold + (player.frozenGold || 0);
   const types = itemTypesMap || {};
 
   const evalItem = (item) => {
@@ -153,4 +155,51 @@ export function removeBargainRequest(bargainId) {
 
 export function clearBargainRequests() {
   bargainRequests.set([]);
+}
+
+export function addAuctionError(action, error) {
+  auctionErrors.update(list => [...list, { id: Date.now(), action, error }]);
+  setTimeout(() => {
+    auctionErrors.update(list => list.slice(1));
+  }, 3000);
+}
+
+export function getActiveAuctions(room) {
+  if (!room || !room.auctions) return [];
+  return room.auctions.filter(a => a.status === 'active');
+}
+
+export function getMyAuctions(room, playerId) {
+  if (!room || !room.auctions) return [];
+  return room.auctions.filter(a => a.sellerId === playerId);
+}
+
+export function getMyBids(room, playerId) {
+  if (!room || !room.auctions) return [];
+  return room.auctions.filter(a =>
+    a.status === 'active' && a.bidHistory && a.bidHistory.some(b => b.bidderId === playerId)
+  );
+}
+
+export function getMinBid(auction) {
+  if (!auction) return 0;
+  if (auction.currentPrice === auction.startingPrice && (!auction.bidHistory || auction.bidHistory.length === 0)) {
+    return auction.startingPrice;
+  }
+  return Math.floor(auction.currentPrice * 1.1);
+}
+
+export function getRemainingWeeks(auction, currentWeek) {
+  if (!auction) return 0;
+  return Math.max(0, auction.endWeek - currentWeek);
+}
+
+export function getAuctionStatusText(status) {
+  switch (status) {
+    case 'active': return '竞拍中';
+    case 'sold': return '已成交';
+    case 'expired': return '已流拍';
+    case 'cancelled': return '已取消';
+    default: return status;
+  }
 }

@@ -5,6 +5,7 @@
   export let showHire;
   export let showUpgrade;
   export let showSynthesis;
+  export let showAuctionHouse;
 
   const phaseDescriptions = {
     purchase: '从批发商采购商品，摆上货架并定价',
@@ -14,6 +15,7 @@
 
   $: canPurchase = $currentPhase === 'purchase' && !$currentPlayer?.isBankrupt;
   $: canExplore = $currentPhase === 'explore' && !$currentPlayer?.isBankrupt;
+  $: canAuction = !$currentPlayer?.isBankrupt;
 </script>
 
 <div class="action-bar">
@@ -42,6 +44,11 @@
       <span class="hint">选择冒险者并派遣到地牢层数</span>
     {:else}
       <span class="hint">营业中，NPC正在购物...</span>
+    {/if}
+    {#if canAuction}
+      <button class="btn btn-auction" on:click={() => showAuctionHouse = true}>
+        🏛️ 拍卖行
+      </button>
     {/if}
   </div>
 </div>
@@ -87,5 +94,17 @@
   .btn-warning:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(245, 158, 11, 0.6);
+  }
+
+  .btn-auction {
+    background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
+    color: white;
+    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.4);
+    border: 1px solid rgba(167, 139, 250, 0.5);
+  }
+
+  .btn-auction:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(139, 92, 246, 0.6);
   }
 </style>

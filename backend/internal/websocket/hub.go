@@ -148,6 +148,13 @@ func (h *Hub) phaseTimer() {
 			}
 
 			if now >= room.PhaseEndTime {
+				prevAuctions := make(map[string]string)
+				for _, a := range room.Auctions {
+					if a.Status == "active" {
+						prevAuctions[a.ID] = string(a.Status)
+					}
+				}
+
 				h.roomManager.ProcessPhaseEnd(room.ID)
 
 				h.BroadcastToRoom(room.ID, models.WSMessage{
@@ -159,6 +166,22 @@ func (h *Hub) phaseTimer() {
 						"phaseEndTime": room.PhaseEndTime,
 					},
 				})
+
+				for _, a := range room.Auctions {
+					if prevAuctions[a.ID] == "active" && a.Status != "active" {
+						h.BroadcastToRoom(room.ID, models.WSMessage{
+							Type:   "auction_end",
+							RoomID: room.ID,
+							Data: map[string]interface{}{
+								"auctionId":     a.ID,
+								"status":        string(a.Status),
+								"currentPrice":  a.CurrentPrice,
+								"highestBidder": a.HighestBidderName,
+								"itemTypeName":  a.ItemTypeName,
+							},
+						})
+					}
+				}
 
 				h.BroadcastToRoom(room.ID, models.WSMessage{
 					Type:   "room_update",
@@ -480,6 +503,145 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 				Type:   "bargain_resolved",
 				RoomID: msg.RoomID,
 				Data:   map[string]interface{}{"bargainId": data.BargainID, "accepted": false},
+			})
+		}
+
+	case "create_auction":
+		var data struct {
+			ItemID        string `json:"itemId"`
+			StartingPrice int    `json:"startingPrice"`
+			BuyoutPrice   int    `json:"buyoutPrice"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		auction, errMsg := h.roomManager.CreateAuction(msg.RoomID, msg.PlayerID, data.ItemID, data.StartingPrice, data.BuyoutPrice)
+		if auction != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "auction_created",
+				RoomID: msg.RoomID,
+				Data:   auction,
+			})
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "auction_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "create_auction", "error": errMsg},
+			})
+		}
+
+	case "place_bid":
+		var data struct {
+			AuctionID string `json:"auctionId"`
+			BidAmount int    `json:"bidAmount"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		auction, errMsg := h.roomManager.PlaceBid(msg.RoomID, msg.PlayerID, data.AuctionID, data.BidAmount)
+		if auction != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			if auction.Status == models.AuctionSold {
+				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+					Type:   "buyout",
+					RoomID: msg.RoomID,
+					Data: map[string]interface{}{
+						"auctionId":     auction.ID,
+						"currentPrice":  auction.CurrentPrice,
+						"highestBidder": auction.HighestBidderName,
+						"itemTypeName":  auction.ItemTypeName,
+					},
+				})
+			} else {
+				h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+					Type:   "bid_update",
+					RoomID: msg.RoomID,
+					Data: map[string]interface{}{
+						"auctionId":     auction.ID,
+						"currentPrice":  auction.CurrentPrice,
+						"highestBidder": auction.HighestBidderName,
+						"itemTypeName":  auction.ItemTypeName,
+						"remainingWeeks": auction.EndWeek - room.CurrentWeek,
+					},
+				})
+			}
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "auction_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "place_bid", "error": errMsg},
+			})
+		}
+
+	case "buyout_auction":
+		var data struct {
+			AuctionID string `json:"auctionId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		auction, errMsg := h.roomManager.Buyout(msg.RoomID, msg.PlayerID, data.AuctionID)
+		if auction != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "buyout",
+				RoomID: msg.RoomID,
+				Data: map[string]interface{}{
+					"auctionId":     auction.ID,
+					"currentPrice":  auction.CurrentPrice,
+					"highestBidder": auction.HighestBidderName,
+					"itemTypeName":  auction.ItemTypeName,
+				},
+			})
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "auction_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "buyout", "error": errMsg},
+			})
+		}
+
+	case "cancel_auction":
+		var data struct {
+			AuctionID string `json:"auctionId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		auction, errMsg := h.roomManager.CancelAuction(msg.RoomID, msg.PlayerID, data.AuctionID)
+		if auction != nil {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "auction_cancelled",
+				RoomID: msg.RoomID,
+				Data:   auction.ID,
+			})
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "auction_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "cancel", "error": errMsg},
 			})
 		}
 	}
