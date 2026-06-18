@@ -91,9 +91,12 @@ export function calculateFinalAssets(player, itemTypesMap) {
   return calculateAssets(player, itemTypesMap);
 }
 
+let logIdCounter = 0;
+
 export function addLog(message, type = 'info') {
+  logIdCounter++;
   eventLog.update(logs => {
-    const newLogs = [...logs, { id: Date.now() + Math.random(), message, type, time: new Date().toLocaleTimeString() }];
+    const newLogs = [...logs, { id: logIdCounter, message, type, time: new Date().toLocaleTimeString() }];
     return newLogs.slice(-50);
   });
 }

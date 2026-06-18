@@ -334,11 +334,11 @@
     </div>
 
     <ActionBar
-      {showWholesaler}
-      {showHire}
-      {showUpgrade}
-      {showSynthesis}
-      {showAuctionHouse}
+      bind:showWholesaler
+      bind:showHire
+      bind:showUpgrade
+      bind:showSynthesis
+      bind:showAuctionHouse
     />
 
     <EventLog />

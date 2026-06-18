@@ -52,6 +52,7 @@
   onMount(() => {
     displayedLogs = $eventLog.slice();
     lastLogCount = $eventLog.length;
+    logQueue = [];
     queueTimer = setInterval(processQueue, 300);
   });
 
