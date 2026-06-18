@@ -6,6 +6,7 @@
     currentPlayer,
     itemTypes,
     guilds,
+    guildInternalData,
     getGuildWarehouseCapacity,
     getGuildUpgradeCost,
     getGuildMaxMembers,
@@ -38,6 +39,11 @@
   $: canUpgrade = currentGuild && isGuildLeader(currentGuild, playerId) && currentGuild.level < 5 && currentGuild.treasury >= upgradeCost;
   $: maxMembers = $room ? getGuildMaxMembers($room.maxPlayers) : 0;
   $: isLeader = currentGuild && isGuildLeader(currentGuild, playerId);
+
+  $: guildData = currentGuild ? ($guildInternalData[currentGuild.id] || { tasks: [], logs: [], ranking: [] }) : { tasks: [], logs: [], ranking: [] };
+  $: guildTasks = guildData.tasks || [];
+  $: guildLogs = guildData.logs || [];
+  $: guildRanking = guildData.ranking || [];
 
   function getItemInfo(typeId) {
     return $itemTypes[typeId] || { name: typeId, category: '' };
@@ -141,6 +147,17 @@
     selectedItem = null;
   }
 
+  function transferLeadership(targetPlayerId, targetPlayerName) {
+    if (!confirm(`确定要将会长职位转让给 ${targetPlayerName} 吗？`)) return;
+    sendWS(ws, 'transfer_guild_leadership', { targetPlayerId });
+  }
+
+  function formatLogTime(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp * 1000);
+    return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }
+
   function close() {
     dispatch('close');
   }
@@ -233,11 +250,17 @@
         <button class="tab-btn" class:active={activeTab === 'info'} on:click={() => activeTab = 'info'}>
           公会信息
         </button>
+        <button class="tab-btn" class:active={activeTab === 'tasks'} on:click={() => activeTab = 'tasks'}>
+          📜 公会任务
+        </button>
         <button class="tab-btn" class:active={activeTab === 'warehouse'} on:click={() => activeTab = 'warehouse'}>
           共享仓库
         </button>
         <button class="tab-btn" class:active={activeTab === 'members'} on:click={() => activeTab = 'members'}>
           成员列表
+        </button>
+        <button class="tab-btn" class:active={activeTab === 'logs'} on:click={() => activeTab = 'logs'}>
+          📋 公会日志
         </button>
         {#if isLeader && currentGuild.level < 5}
           <button class="tab-btn upgrade-btn" class:disabled={!canUpgrade} on:click={upgradeGuild}>
@@ -297,6 +320,42 @@
               <h4>贡献说明</h4>
               <p>成员在拍卖行成功卖出商品时，成交价的2%自动作为公会贡献金充入公会金库。</p>
             </div>
+          </div>
+
+        {:else if activeTab === 'tasks'}
+          <div class="tasks-section">
+            <h3 class="section-subtitle">本周公会任务</h3>
+            {#if guildTasks.length === 0}
+              <p class="empty">暂无任务，请等待下周刷新</p>
+            {:else}
+              <div class="tasks-list">
+                {#each guildTasks as task}
+                  <div class="task-card" class:completed={task.completed}>
+                    <div class="task-header">
+                      <span class="task-name">{task.description}</span>
+                      {#if task.completed}
+                        <span class="task-completed-badge">✅ 已完成</span>
+                      {/if}
+                    </div>
+                    <div class="task-progress-wrap">
+                      <div class="task-progress-bar">
+                        <div 
+                          class="task-progress-fill" 
+                          style="width: {Math.min(100, (task.progress / task.target) * 100)}%"
+                          class:completed={task.completed}
+                        ></div>
+                      </div>
+                      <span class="task-progress-text">{task.progress}/{task.target}</span>
+                    </div>
+                    <div class="task-rewards">
+                      <span class="reward-gold">💰 {task.rewardGold}</span>
+                      <span class="reward-exp">✨ {task.rewardExp} EXP</span>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <p class="tasks-hint">💡 提示：完成任务后金币和经验将自动发放给所有在线成员</p>
           </div>
 
         {:else if activeTab === 'warehouse'}
@@ -370,35 +429,83 @@
 
         {:else if activeTab === 'members'}
           <div class="members-section">
+            <h3 class="section-subtitle">成员贡献排行榜</h3>
             <div class="members-list">
-              {#each currentGuild.members as member, i}
-                <div class="member-card" class:leader={member.isLeader}>
+              {#each guildRanking as rankItem}
+                <div 
+                  class="member-card" 
+                  class:leader={rankItem.isLeader}
+                  class:gold={rankItem.rank === 1}
+                  class:silver={rankItem.rank === 2}
+                  class:bronze={rankItem.rank === 3}
+                >
                   <div class="member-info">
-                    <span class="member-rank">#{i + 1}</span>
-                    <span class="member-name">
-                      {member.isLeader ? '👑' : ''}{member.playerName}
+                    <span class="member-rank">
+                      {#if rankItem.isLeader}
+                        👑
+                      {:else if rankItem.rank === 1}
+                        🥇
+                      {:else if rankItem.rank === 2}
+                        🥈
+                      {:else if rankItem.rank === 3}
+                        🥉
+                      {:else}
+                        #{rankItem.rank}
+                      {/if}
                     </span>
-                    {#if member.isLeader}
+                    <span class="member-name">
+                      {rankItem.playerName}
+                    </span>
+                    {#if rankItem.isLeader}
                       <span class="leader-badge">会长</span>
                     {/if}
                   </div>
                   <div class="member-stats">
-                    <span class="contribution">贡献: {member.contribution}💰</span>
-                    <span class="join-time">
-                      加入: {new Date(member.joinTime * 1000).toLocaleDateString()}
+                    <span class="contribution">贡献: {rankItem.contribution}💰</span>
+                    <span class="join-days">
+                      加入: {rankItem.joinWeeks}周
                     </span>
                   </div>
-                  {#if isLeader && !member.isLeader}
-                    <button 
-                      class="btn btn-danger small" 
-                      on:click={() => kickMember(member.playerId)}
-                    >
-                      踢出
-                    </button>
+                  {#if isLeader && !rankItem.isLeader}
+                    <div class="member-actions">
+                      <button 
+                        class="btn btn-secondary small" 
+                        on:click={() => transferLeadership(rankItem.playerId, rankItem.playerName)}
+                      >
+                        转让
+                      </button>
+                      <button 
+                        class="btn btn-danger small" 
+                        on:click={() => kickMember(rankItem.playerId)}
+                      >
+                        踢出
+                      </button>
+                    </div>
                   {/if}
                 </div>
               {/each}
             </div>
+          </div>
+
+        {:else if activeTab === 'logs'}
+          <div class="logs-section">
+            <h3 class="section-subtitle">公会日志</h3>
+            {#if guildLogs.length === 0}
+              <p class="empty">暂无日志记录</p>
+            {:else}
+              <div class="logs-list">
+                {#each guildLogs as log}
+                  <div class="log-entry">
+                    <span class="log-time">{formatLogTime(log.timestamp)}</span>
+                    <span class="log-separator">-</span>
+                    <span class="log-operator">{log.operatorName}</span>
+                    <span class="log-separator">-</span>
+                    <span class="log-description">{log.description}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            <p class="logs-hint">💡 最多保留最近50条日志记录</p>
           </div>
         {/if}
       </div>
@@ -902,5 +1009,213 @@
   .btn-danger:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+  }
+
+  .btn-secondary {
+    background: linear-gradient(135deg, #6b7280, #4b5563);
+    color: white;
+    border: none;
+  }
+
+  .section-subtitle {
+    color: var(--primary);
+    margin: 0 0 20px 0;
+  }
+
+  .tasks-section {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .tasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .task-card {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 18px;
+    border-radius: 10px;
+    border-left: 4px solid var(--primary);
+    transition: all 0.2s;
+  }
+
+  .task-card.completed {
+    border-left-color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+  }
+
+  .task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  .task-name {
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .task-completed-badge {
+    color: #22c55e;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .task-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .task-progress-bar {
+    flex: 1;
+    height: 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .task-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), #6d28d9);
+    transition: width 0.3s;
+  }
+
+  .task-progress-fill.completed {
+    background: linear-gradient(90deg, #22c55e, #16a34a);
+  }
+
+  .task-progress-text {
+    color: var(--gray);
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 80px;
+    text-align: right;
+  }
+
+  .task-rewards {
+    display: flex;
+    gap: 15px;
+    font-size: 13px;
+  }
+
+  .reward-gold {
+    color: var(--secondary);
+    font-weight: 600;
+  }
+
+  .reward-exp {
+    color: #60a5fa;
+    font-weight: 600;
+  }
+
+  .tasks-hint {
+    text-align: center;
+    color: var(--gray);
+    font-size: 13px;
+    margin: 0;
+  }
+
+  .logs-section {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .logs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+
+  .log-entry {
+    background: rgba(0, 0, 0, 0.15);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    line-height: 1.5;
+  }
+
+  .log-time {
+    color: var(--gray);
+    flex-shrink: 0;
+    font-family: monospace;
+  }
+
+  .log-separator {
+    color: var(--gray);
+    flex-shrink: 0;
+  }
+
+  .log-operator {
+    color: var(--primary);
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .log-description {
+    color: var(--light);
+  }
+
+  .logs-hint {
+    text-align: center;
+    color: var(--gray);
+    font-size: 13px;
+    margin: 0;
+  }
+
+  .member-card.gold {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+  }
+
+  .member-card.silver {
+    border-left-color: #9ca3af;
+    background: rgba(156, 163, 175, 0.1);
+  }
+
+  .member-card.bronze {
+    border-left-color: #b45309;
+    background: rgba(180, 83, 9, 0.1);
+  }
+
+  .member-card.gold .member-rank {
+    color: #f59e0b;
+    font-size: 18px;
+  }
+
+  .member-card.silver .member-rank {
+    color: #9ca3af;
+    font-size: 18px;
+  }
+
+  .member-card.bronze .member-rank {
+    color: #b45309;
+    font-size: 18px;
+  }
+
+  .member-card.leader .member-rank {
+    color: var(--secondary);
+    font-size: 18px;
+  }
+
+  .join-days {
+    color: var(--gray);
+    font-size: 12px;
+  }
+
+  .member-actions {
+    display: flex;
+    gap: 8px;
   }
 </style>

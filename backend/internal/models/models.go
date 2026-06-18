@@ -126,26 +126,67 @@ type Auction struct {
 	GuildID        string        `json:"guildId,omitempty"`
 }
 
+type GuildTaskType string
+
+const (
+	GuildTaskTypeSellItems      GuildTaskType = "sell_items"
+	GuildTaskTypeTreasuryGold   GuildTaskType = "treasury_gold"
+	GuildTaskTypeMemberCount    GuildTaskType = "member_count"
+)
+
+type GuildTask struct {
+	ID          string       `json:"id"`
+	Type        GuildTaskType `json:"type"`
+	Target      int          `json:"target"`
+	Progress    int          `json:"progress"`
+	Completed   bool         `json:"completed"`
+	RewardGold  int          `json:"rewardGold"`
+	RewardExp   int          `json:"rewardExp"`
+	Description string       `json:"description"`
+}
+
+type GuildLogEntry struct {
+	ID        string `json:"id"`
+	Timestamp int64  `json:"timestamp"`
+	PlayerID  string `json:"playerId"`
+	PlayerName string `json:"playerName"`
+	Action    string `json:"action"`
+}
+
+type GuildMemberRank struct {
+	PlayerID     string `json:"playerId"`
+	PlayerName   string `json:"playerName"`
+	Rank         int    `json:"rank"`
+	Contribution int    `json:"contribution"`
+	JoinWeeks    int    `json:"joinWeeks"`
+	IsLeader     bool   `json:"isLeader"`
+}
+
 type GuildMember struct {
 	PlayerID     string    `json:"playerId"`
 	PlayerName   string    `json:"playerName"`
 	JoinTime     int64     `json:"joinTime"`
+	JoinWeek     int       `json:"joinWeek"`
 	IsLeader     bool      `json:"isLeader"`
 	Contribution int       `json:"contribution"`
+	TotalExp     int       `json:"totalExp"`
 }
 
 type Guild struct {
-	ID          string            `json:"id"`
-	RoomID      string            `json:"roomId"`
-	Name        string            `json:"name"`
-	Abbreviation string           `json:"abbreviation"`
-	Level       int               `json:"level"`
-	Treasury    int               `json:"treasury"`
-	LeaderID    string            `json:"leaderId"`
-	Members     []GuildMember     `json:"members"`
-	Warehouse   []Item            `json:"warehouse"`
-	CreatedAt   int64             `json:"createdAt"`
-	BannedPlayers map[string]int64 `json:"bannedPlayers,omitempty"`
+	ID             string                `json:"id"`
+	RoomID         string                `json:"roomId"`
+	Name           string                `json:"name"`
+	Abbreviation   string                `json:"abbreviation"`
+	Level          int                   `json:"level"`
+	Treasury       int                   `json:"treasury"`
+	LeaderID       string                `json:"leaderId"`
+	Members        []GuildMember         `json:"members"`
+	Warehouse      []Item                `json:"warehouse"`
+	CreatedAt      int64                 `json:"createdAt"`
+	BannedPlayers  map[string]int64      `json:"bannedPlayers,omitempty"`
+	Tasks          []GuildTask           `json:"tasks"`
+	Logs           []GuildLogEntry       `json:"logs"`
+	LastTaskWeek   int                   `json:"lastTaskWeek"`
 }
 
 const (
@@ -154,6 +195,8 @@ const (
 	GuildContributionRate  = 0.02
 	GuildWarehousePerLevel = 5
 	GuildKickBanDuration   = 2
+	GuildMaxLogs           = 50
+	GuildTasksPerWeek      = 3
 )
 
 var GuildUpgradeRequirements = map[int]int{
@@ -161,6 +204,27 @@ var GuildUpgradeRequirements = map[int]int{
 	3: 500,
 	4: 1000,
 	5: 2000,
+}
+
+var GuildTaskBaseTargets = map[GuildTaskType]int{
+	GuildTaskTypeSellItems:    10,
+	GuildTaskTypeTreasuryGold: 50,
+	GuildTaskTypeMemberCount:  2,
+}
+
+var GuildTaskBaseRewards = map[GuildTaskType]struct {
+	Gold int
+	Exp  int
+}{
+	GuildTaskTypeSellItems:    {Gold: 100, Exp: 50},
+	GuildTaskTypeTreasuryGold: {Gold: 150, Exp: 80},
+	GuildTaskTypeMemberCount:  {Gold: 80, Exp: 40},
+}
+
+var GuildTaskDescriptions = map[GuildTaskType]string{
+	GuildTaskTypeSellItems:    "全体成员本周共出售%d件物品",
+	GuildTaskTypeTreasuryGold: "公会金库本周累计增加%d金币",
+	GuildTaskTypeMemberCount:  "公会成员总数达到%d人",
 }
 
 type PlayerState struct {

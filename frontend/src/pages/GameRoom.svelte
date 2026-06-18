@@ -16,6 +16,8 @@
     gameResults,
     isConnected,
     guilds,
+    guildRankings,
+    guildInternalData,
     addLog,
     addBargainRequest,
     removeBargainRequest,
@@ -222,6 +224,23 @@
       case 'guild_update':
         if (msg.data && msg.data.guilds) {
           guilds.set(msg.data.guilds);
+        }
+        if (msg.data && msg.data.rankings) {
+          guildRankings.set(msg.data.rankings);
+        }
+        break;
+      case 'guild_internal_update':
+        if (msg.data && msg.data.guildId) {
+          guildInternalData.update(current => {
+            return {
+              ...current,
+              [msg.data.guildId]: {
+                tasks: msg.data.tasks || [],
+                logs: msg.data.logs || [],
+                ranking: msg.data.ranking || [],
+              }
+            };
+          });
         }
         break;
       case 'guild_created':

@@ -26,6 +26,8 @@ export const bargainRequests = writable([]);
 export const auctionErrors = writable([]);
 export const guilds = writable([]);
 export const guildErrors = writable([]);
+export const guildRankings = writable({});
+export const guildInternalData = writable({});
 
 export const currentPlayer = derived([room, currentUser], ([$room, $user]) => {
   if (!$room || !$user.playerId) return null;

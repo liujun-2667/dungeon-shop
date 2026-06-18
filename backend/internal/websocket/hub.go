@@ -323,11 +323,50 @@ func (h *Hub) broadcastGuildUpdate(roomID string) {
 		guildsList = append(guildsList, guild)
 	}
 
+	guildRankings := make(map[string][]models.GuildMemberRank)
+	for _, guild := range room.Guilds {
+		ranking := h.roomManager.GetGuildMemberRanking(roomID, guild.ID)
+		guildRankings[guild.ID] = ranking
+	}
+
 	h.BroadcastToRoom(roomID, models.WSMessage{
 		Type:   "guild_update",
 		RoomID: roomID,
 		Data: map[string]interface{}{
-			"guilds": guildsList,
+			"guilds":   guildsList,
+			"rankings": guildRankings,
+		},
+	})
+
+	for _, guild := range room.Guilds {
+		h.sendGuildInternalUpdate(roomID, guild.ID, guild, guildRankings[guild.ID])
+	}
+}
+
+func (h *Hub) sendGuildInternalUpdate(roomID, guildID string, guild *models.Guild, ranking []models.GuildMemberRank) {
+	if guild == nil {
+		room, ok := h.roomManager.GetRoom(roomID)
+		if !ok {
+			return
+		}
+		var gok bool
+		guild, gok = room.Guilds[guildID]
+		if !gok {
+			return
+		}
+		if ranking == nil {
+			ranking = h.roomManager.GetGuildMemberRanking(roomID, guildID)
+		}
+	}
+
+	h.SendToGuild(roomID, guildID, models.WSMessage{
+		Type:   "guild_internal_update",
+		RoomID: roomID,
+		Data: map[string]interface{}{
+			"guildId":  guildID,
+			"tasks":    guild.Tasks,
+			"logs":     guild.Logs,
+			"ranking":  ranking,
 		},
 	})
 }
@@ -905,11 +944,35 @@ func (h *Hub) handleMessage(msg models.WSMessage) {
 				RoomID: msg.RoomID,
 				Data:   auction,
 			})
+			h.broadcastGuildUpdate(msg.RoomID)
 		} else {
 			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
 				Type:   "auction_error",
 				RoomID: msg.RoomID,
 				Data:   map[string]interface{}{"action": "create_guild_auction", "error": errMsg},
+			})
+		}
+
+	case "transfer_guild_leadership":
+		var data struct {
+			TargetPlayerID string `json:"targetPlayerId"`
+		}
+		dataBytes, _ := json.Marshal(msg.Data)
+		json.Unmarshal(dataBytes, &data)
+
+		errMsg := h.roomManager.TransferGuildLeadership(msg.RoomID, msg.PlayerID, data.TargetPlayerID)
+		if errMsg == "" {
+			h.BroadcastToRoom(msg.RoomID, models.WSMessage{
+				Type:   "room_update",
+				RoomID: msg.RoomID,
+				Data:   room,
+			})
+			h.broadcastGuildUpdate(msg.RoomID)
+		} else {
+			h.SendToPlayer(msg.RoomID, msg.PlayerID, models.WSMessage{
+				Type:   "guild_error",
+				RoomID: msg.RoomID,
+				Data:   map[string]interface{}{"action": "transfer_leadership", "error": errMsg},
 			})
 		}
 	}
