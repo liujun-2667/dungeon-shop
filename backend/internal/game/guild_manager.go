@@ -1,7 +1,9 @@
 package game
 
 import (
+	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,11 +119,12 @@ func (rm *RoomManager) JoinGuild(roomID, playerID, guildID string) (*models.Guil
 		return nil, "公会人数已满"
 	}
 
-	if banExpireTime, banned := guild.BannedPlayers[playerID]; banned {
+	if kickedWeek, banned := guild.BannedPlayers[playerID]; banned {
 		banDurationWeeks := int(models.GuildKickBanDuration)
-		weeksSinceBan := (room.CurrentWeek - int(banExpireTime/int64(models.GuildKickBanDuration)))
+		weeksSinceBan := room.CurrentWeek - int(kickedWeek)
 		if weeksSinceBan < banDurationWeeks {
-			return nil, "你被该公会踢出未满2周，暂不能加入"
+			remaining := banDurationWeeks - weeksSinceBan
+			return nil, fmt.Sprintf("你被该公会踢出未满2周，还需等待%d周才能加入", remaining)
 		}
 		delete(guild.BannedPlayers, playerID)
 	}
@@ -160,7 +163,7 @@ func (rm *RoomManager) LeaveGuild(roomID, playerID string) string {
 	}
 
 	if len(guild.Members) == 1 {
-		rm.distributeGuildWarehouseOnDisband(room, guild)
+		rm.distributeGuildWarehouseOnDisband(room, guild, playerID)
 		delete(room.Guilds, guild.ID)
 		player.GuildID = ""
 		return ""
@@ -420,7 +423,7 @@ func (rm *RoomManager) WithdrawGuildWarehouse(roomID, playerID, itemID string) s
 	return ""
 }
 
-func (rm *RoomManager) distributeGuildWarehouseOnDisband(room *models.Room, guild *models.Guild) {
+func (rm *RoomManager) distributeGuildWarehouseOnDisband(room *models.Room, guild *models.Guild, disbanderID string) {
 	if len(guild.Warehouse) == 0 {
 		return
 	}
@@ -436,43 +439,50 @@ func (rm *RoomManager) distributeGuildWarehouseOnDisband(room *models.Room, guil
 		return
 	}
 
-	sortedMembers := make([]*models.PlayerState, len(onlineMembers))
-	copy(sortedMembers, onlineMembers)
-	for i := range sortedMembers {
-		for j := i + 1; j < len(sortedMembers); j++ {
-			var joinTimeI, joinTimeJ int64
-			for _, m := range guild.Members {
-				if m.PlayerID == sortedMembers[i].ID {
-					joinTimeI = m.JoinTime
-				}
-				if m.PlayerID == sortedMembers[j].ID {
-					joinTimeJ = m.JoinTime
-				}
-			}
-			if joinTimeI > joinTimeJ {
-				sortedMembers[i], sortedMembers[j] = sortedMembers[j], sortedMembers[i]
-			}
-		}
-	}
+	sort.SliceStable(onlineMembers, func(i, j int) bool {
+		return getMemberJoinTime(guild, onlineMembers[i].ID) < getMemberJoinTime(guild, onlineMembers[j].ID)
+	})
 
-	warehouseItems := make([]models.Item, len(guild.Warehouse))
-	copy(warehouseItems, guild.Warehouse)
+	items := make([]models.Item, len(guild.Warehouse))
+	copy(items, guild.Warehouse)
+	guild.Warehouse = guild.Warehouse[:0]
 
 	memberIdx := 0
-	for len(warehouseItems) > 0 {
-		if len(sortedMembers) == 0 {
-			break
+	for len(items) > 0 {
+		player := onlineMembers[memberIdx%len(onlineMembers)]
+		if len(player.Warehouse) < player.WarehouseCapacity {
+			player.Warehouse = append(player.Warehouse, items[0])
+			items = items[1:]
+			memberIdx++
+			continue
 		}
 
-		player := sortedMembers[memberIdx%len(sortedMembers)]
-		if len(player.Warehouse) < player.WarehouseCapacity {
-			player.Warehouse = append(player.Warehouse, warehouseItems[0])
-			warehouseItems = warehouseItems[1:]
+		allFull := true
+		for _, p := range onlineMembers {
+			if len(p.Warehouse) < p.WarehouseCapacity {
+				allFull = false
+				break
+			}
+		}
+		if allFull {
+			break
 		}
 		memberIdx++
+	}
 
-		if memberIdx > len(sortedMembers)*2 {
-			break
+	if len(items) > 0 {
+		disbander := room.Players[disbanderID]
+		if disbander != nil {
+			disbander.Warehouse = append(disbander.Warehouse, items...)
 		}
 	}
+}
+
+func getMemberJoinTime(guild *models.Guild, playerID string) int64 {
+	for _, m := range guild.Members {
+		if m.PlayerID == playerID {
+			return m.JoinTime
+		}
+	}
+	return 0
 }

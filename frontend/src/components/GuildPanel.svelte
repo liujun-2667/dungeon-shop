@@ -21,6 +21,7 @@
   let showCreateForm = false;
   let newGuildName = '';
   let draggedItem = null;
+  let selectedItem = null;
 
   const qualityNames = {
     common: '普通',
@@ -86,6 +87,7 @@
 
   function onDragStart(item, source) {
     draggedItem = { item, source };
+    selectedItem = { item, source };
   }
 
   function onDragOver(e) {
@@ -102,6 +104,41 @@
     }
     
     draggedItem = null;
+    selectedItem = null;
+  }
+
+  function selectItem(item, source) {
+    if (selectedItem && selectedItem.item.id === item.id && selectedItem.source === source) {
+      selectedItem = null;
+    } else {
+      selectedItem = { item, source };
+    }
+  }
+
+  function transferToGuild() {
+    if (!selectedItem) {
+      alert('请先点击选择一件个人仓库中的物品');
+      return;
+    }
+    if (selectedItem.source !== 'personal') {
+      alert('请选择个人仓库中的物品进行存入');
+      return;
+    }
+    depositItem(selectedItem.item.id);
+    selectedItem = null;
+  }
+
+  function transferToPersonal() {
+    if (!selectedItem) {
+      alert('请先点击选择一件公会仓库中的物品');
+      return;
+    }
+    if (selectedItem.source !== 'guild') {
+      alert('请选择公会仓库中的物品进行取出');
+      return;
+    }
+    withdrawItem(selectedItem.item.id);
+    selectedItem = null;
   }
 
   function close() {
@@ -270,13 +307,15 @@
                 on:dragover={onDragOver}
                 on:drop={() => onDrop('personal')}
               >
-                <h4>个人仓库 (拖到这里取出)</h4>
+                <h4>个人仓库 (点击选中或拖拽取出)</h4>
                 <div class="warehouse-grid">
                   {#each $currentPlayer.warehouse as item}
                     <div 
                       class="warehouse-item quality-{item.quality}"
+                      class:selected={selectedItem && selectedItem.item.id === item.id && selectedItem.source === 'personal'}
                       draggable="true"
                       on:dragstart={() => onDragStart(item, 'personal')}
+                      on:click={() => selectItem(item, 'personal')}
                       title="{getItemInfo(item.typeId).name} ({qualityNames[item.quality]})"
                     >
                       <span class="item-icon">📦</span>
@@ -290,12 +329,12 @@
               </div>
 
               <div class="transfer-arrows">
-                <div class="arrow" on:click={() => draggedItem && draggedItem.source === 'personal' && onDrop('guild')}>
+                <button class="arrow" on:click={transferToGuild} title="将选中的个人物品存入公会仓库">
                   ➡️
-                </div>
-                <div class="arrow" on:click={() => draggedItem && draggedItem.source === 'guild' && onDrop('personal')}>
+                </button>
+                <button class="arrow" on:click={transferToPersonal} title="将选中的公会物品取出到个人仓库">
                   ⬅️
-                </div>
+                </button>
               </div>
 
               <div 
@@ -303,13 +342,15 @@
                 on:dragover={onDragOver}
                 on:drop={() => onDrop('guild')}
               >
-                <h4>公会仓库 (拖到这里存入)</h4>
+                <h4>公会仓库 (点击选中或拖拽存入)</h4>
                 <div class="warehouse-grid">
                   {#each currentGuild.warehouse as item}
                     <div 
                       class="warehouse-item quality-{item.quality}"
+                      class:selected={selectedItem && selectedItem.item.id === item.id && selectedItem.source === 'guild'}
                       draggable="true"
                       on:dragstart={() => onDragStart(item, 'guild')}
+                      on:click={() => selectItem(item, 'guild')}
                       title="{getItemInfo(item.typeId).name} ({qualityNames[item.quality]})"
                     >
                       <span class="item-icon">📦</span>
@@ -324,7 +365,7 @@
                 </div>
               </div>
             </div>
-            <p class="warehouse-hint">💡 提示：可以拖拽物品在个人仓库和公会仓库之间转移</p>
+            <p class="warehouse-hint">💡 提示：点击物品选中后按箭头转移，或直接拖拽物品在个人仓库和公会仓库之间转移</p>
           </div>
 
         {:else if activeTab === 'members'}
@@ -735,6 +776,13 @@
     font-size: 12px;
   }
 
+  .warehouse-item.selected {
+    border: 2px solid var(--primary);
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
+    background: rgba(139, 92, 246, 0.25);
+    transform: translateY(-2px);
+  }
+
   .transfer-arrows {
     display: flex;
     flex-direction: column;
@@ -745,15 +793,22 @@
   .arrow {
     font-size: 24px;
     cursor: pointer;
-    padding: 10px;
+    padding: 12px 16px;
+    border: none;
     border-radius: 50%;
     background: rgba(139, 92, 246, 0.2);
     transition: all 0.2s;
+    color: var(--light);
+    line-height: 1;
   }
 
   .arrow:hover {
     background: var(--primary);
     transform: scale(1.1);
+  }
+
+  .arrow:active {
+    transform: scale(0.95);
   }
 
   .warehouse-hint {
