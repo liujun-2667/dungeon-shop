@@ -441,32 +441,7 @@ func (rm *RoomManager) processSingleNPCShopping(room *models.Room, npc models.NP
 
 			if player.GuildID != "" {
 				if guild, ok := room.Guilds[player.GuildID]; ok {
-					rm.generateGuildTasksLocked(room, guild)
-					for gi := range guild.Tasks {
-						if guild.Tasks[gi].Type == models.GuildTaskTypeSellItems && !guild.Tasks[gi].Completed {
-							guild.Tasks[gi].Progress++
-							if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-								guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-								guild.Tasks[gi].Completed = true
-								rewardGold := guild.Tasks[gi].RewardGold
-								rewardExp := guild.Tasks[gi].RewardExp
-								taskDesc := guild.Tasks[gi].Description
-								for _, member := range guild.Members {
-									if mp, ok := room.Players[member.PlayerID]; ok {
-										mp.Gold += rewardGold
-										for mj := range guild.Members {
-											if guild.Members[mj].PlayerID == member.PlayerID {
-												guild.Members[mj].TotalExp += rewardExp
-												break
-											}
-										}
-									}
-								}
-								rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-							}
-							break
-						}
-					}
+					rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeSellItems, 1)
 				}
 			}
 
@@ -538,32 +513,7 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 
 		if player.GuildID != "" {
 			if guild, ok := room.Guilds[player.GuildID]; ok {
-				rm.generateGuildTasksLocked(room, guild)
-				for gi := range guild.Tasks {
-					if guild.Tasks[gi].Type == models.GuildTaskTypeSellItems && !guild.Tasks[gi].Completed {
-						guild.Tasks[gi].Progress++
-						if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-							guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-							guild.Tasks[gi].Completed = true
-							rewardGold := guild.Tasks[gi].RewardGold
-							rewardExp := guild.Tasks[gi].RewardExp
-							taskDesc := guild.Tasks[gi].Description
-							for _, member := range guild.Members {
-								if mp, ok := room.Players[member.PlayerID]; ok {
-									mp.Gold += rewardGold
-									for mj := range guild.Members {
-										if guild.Members[mj].PlayerID == member.PlayerID {
-											guild.Members[mj].TotalExp += rewardExp
-											break
-										}
-									}
-								}
-							}
-							rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-						}
-						break
-					}
-				}
+				rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeSellItems, 1)
 			}
 		}
 
@@ -602,32 +552,7 @@ func (rm *RoomManager) ResolveBargain(roomID, bargainID string, accepted bool) [
 
 			if player.GuildID != "" {
 				if guild, ok := room.Guilds[player.GuildID]; ok {
-					rm.generateGuildTasksLocked(room, guild)
-					for gi := range guild.Tasks {
-						if guild.Tasks[gi].Type == models.GuildTaskTypeSellItems && !guild.Tasks[gi].Completed {
-							guild.Tasks[gi].Progress++
-							if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-								guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-								guild.Tasks[gi].Completed = true
-								rewardGold := guild.Tasks[gi].RewardGold
-								rewardExp := guild.Tasks[gi].RewardExp
-								taskDesc := guild.Tasks[gi].Description
-								for _, member := range guild.Members {
-									if mp, ok := room.Players[member.PlayerID]; ok {
-										mp.Gold += rewardGold
-										for mj := range guild.Members {
-											if guild.Members[mj].PlayerID == member.PlayerID {
-												guild.Members[mj].TotalExp += rewardExp
-												break
-											}
-										}
-									}
-								}
-								rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-							}
-							break
-						}
-					}
+					rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeSellItems, 1)
 				}
 			}
 
@@ -1555,32 +1480,7 @@ func (rm *RoomManager) executeBuyoutLocked(room *models.Room, playerID string, a
 					}
 				}
 
-				rm.generateGuildTasksLocked(room, guild)
-				for gi := range guild.Tasks {
-					if guild.Tasks[gi].Type == models.GuildTaskTypeTreasuryGold && !guild.Tasks[gi].Completed {
-						guild.Tasks[gi].Progress += guildContribution
-						if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-							guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-							guild.Tasks[gi].Completed = true
-							rewardGold := guild.Tasks[gi].RewardGold
-							rewardExp := guild.Tasks[gi].RewardExp
-							taskDesc := guild.Tasks[gi].Description
-							for _, member := range guild.Members {
-								if mp, ok := room.Players[member.PlayerID]; ok {
-									mp.Gold += rewardGold
-									for mj := range guild.Members {
-										if guild.Members[mj].PlayerID == member.PlayerID {
-											guild.Members[mj].TotalExp += rewardExp
-											break
-										}
-									}
-								}
-							}
-							rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-						}
-						break
-					}
-				}
+				rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeTreasuryGold, guildContribution)
 			}
 		}
 
@@ -1968,32 +1868,7 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 								}
 							}
 
-							rm.generateGuildTasksLocked(room, guild)
-							for gi := range guild.Tasks {
-								if guild.Tasks[gi].Type == models.GuildTaskTypeTreasuryGold && !guild.Tasks[gi].Completed {
-									guild.Tasks[gi].Progress += guildContribution
-									if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-										guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-										guild.Tasks[gi].Completed = true
-										rewardGold := guild.Tasks[gi].RewardGold
-										rewardExp := guild.Tasks[gi].RewardExp
-										taskDesc := guild.Tasks[gi].Description
-										for _, member := range guild.Members {
-											if mp, ok := room.Players[member.PlayerID]; ok {
-												mp.Gold += rewardGold
-												for mj := range guild.Members {
-													if guild.Members[mj].PlayerID == member.PlayerID {
-														guild.Members[mj].TotalExp += rewardExp
-														break
-													}
-												}
-											}
-										}
-										rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-									}
-									break
-								}
-							}
+							rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeTreasuryGold, guildContribution)
 						}
 					}
 
@@ -2049,32 +1924,7 @@ func (rm *RoomManager) settleAuctionsLocked(room *models.Room) {
 									}
 								}
 
-								rm.generateGuildTasksLocked(room, guild)
-								for gi := range guild.Tasks {
-									if guild.Tasks[gi].Type == models.GuildTaskTypeTreasuryGold && !guild.Tasks[gi].Completed {
-										guild.Tasks[gi].Progress += guildContribution
-										if guild.Tasks[gi].Progress >= guild.Tasks[gi].Target {
-											guild.Tasks[gi].Progress = guild.Tasks[gi].Target
-											guild.Tasks[gi].Completed = true
-											rewardGold := guild.Tasks[gi].RewardGold
-											rewardExp := guild.Tasks[gi].RewardExp
-											taskDesc := guild.Tasks[gi].Description
-											for _, member := range guild.Members {
-												if mp, ok := room.Players[member.PlayerID]; ok {
-													mp.Gold += rewardGold
-													for mj := range guild.Members {
-														if guild.Members[mj].PlayerID == member.PlayerID {
-															guild.Members[mj].TotalExp += rewardExp
-															break
-														}
-													}
-												}
-											}
-											rm.addGuildLogLocked(room, guild, "", "系统", fmt.Sprintf("任务完成：%s，奖励%d金币%d经验", taskDesc, rewardGold, rewardExp))
-										}
-										break
-									}
-								}
+								rm.updateGuildTaskProgressLocked(room, guild, models.GuildTaskTypeTreasuryGold, guildContribution)
 							}
 						}
 

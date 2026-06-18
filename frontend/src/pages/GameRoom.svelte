@@ -237,7 +237,6 @@
               [msg.data.guildId]: {
                 tasks: msg.data.tasks || [],
                 logs: msg.data.logs || [],
-                ranking: msg.data.ranking || [],
               }
             };
           });

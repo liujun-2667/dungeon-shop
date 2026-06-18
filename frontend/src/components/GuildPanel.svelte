@@ -7,6 +7,7 @@
     itemTypes,
     guilds,
     guildInternalData,
+    guildRankings,
     getGuildWarehouseCapacity,
     getGuildUpgradeCost,
     getGuildMaxMembers,
@@ -40,10 +41,10 @@
   $: maxMembers = $room ? getGuildMaxMembers($room.maxPlayers) : 0;
   $: isLeader = currentGuild && isGuildLeader(currentGuild, playerId);
 
-  $: guildData = currentGuild ? ($guildInternalData[currentGuild.id] || { tasks: [], logs: [], ranking: [] }) : { tasks: [], logs: [], ranking: [] };
+  $: guildData = currentGuild ? ($guildInternalData[currentGuild.id] || { tasks: [], logs: [] }) : { tasks: [], logs: [] };
   $: guildTasks = guildData.tasks || [];
   $: guildLogs = guildData.logs || [];
-  $: guildRanking = guildData.ranking || [];
+  $: guildRanking = currentGuild ? ($guildRankings[currentGuild.id] || []) : [];
 
   function getItemInfo(typeId) {
     return $itemTypes[typeId] || { name: typeId, category: '' };

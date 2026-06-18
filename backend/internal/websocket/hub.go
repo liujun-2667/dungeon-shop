@@ -194,6 +194,8 @@ func (h *Hub) phaseTimer() {
 					Data:   room,
 				})
 
+				h.broadcastGuildUpdate(room.ID)
+
 				h.broadcastReputationUpdates(room.ID, room)
 
 				if room.Status == "finished" {
@@ -339,11 +341,11 @@ func (h *Hub) broadcastGuildUpdate(roomID string) {
 	})
 
 	for _, guild := range room.Guilds {
-		h.sendGuildInternalUpdate(roomID, guild.ID, guild, guildRankings[guild.ID])
+		h.sendGuildInternalUpdate(roomID, guild.ID, guild)
 	}
 }
 
-func (h *Hub) sendGuildInternalUpdate(roomID, guildID string, guild *models.Guild, ranking []models.GuildMemberRank) {
+func (h *Hub) sendGuildInternalUpdate(roomID, guildID string, guild *models.Guild) {
 	if guild == nil {
 		room, ok := h.roomManager.GetRoom(roomID)
 		if !ok {
@@ -354,19 +356,15 @@ func (h *Hub) sendGuildInternalUpdate(roomID, guildID string, guild *models.Guil
 		if !gok {
 			return
 		}
-		if ranking == nil {
-			ranking = h.roomManager.GetGuildMemberRanking(roomID, guildID)
-		}
 	}
 
 	h.SendToGuild(roomID, guildID, models.WSMessage{
 		Type:   "guild_internal_update",
 		RoomID: roomID,
 		Data: map[string]interface{}{
-			"guildId":  guildID,
-			"tasks":    guild.Tasks,
-			"logs":     guild.Logs,
-			"ranking":  ranking,
+			"guildId": guildID,
+			"tasks":   guild.Tasks,
+			"logs":    guild.Logs,
 		},
 	})
 }
